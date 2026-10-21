@@ -1,0 +1,32 @@
+# 依赖
+node_modules/
+.node_modules/
+
+# 构建产物
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# 环境与密钥：真实配置一律不入库，只允许模板
+.env
+.env.*
+!.env.example
+!.env.development
+!.env.production
+
+# 运行时产物：dev.sh 的 PID 与日志、本地文件存储
+.run/
+logs/
+*.log
+backend/uploads/
+
+# 缓存
+.eslintcache
+.vite/
+
+# 系统与编辑器
+.DS_Store
+.idea/
+.trae/
+.husky/

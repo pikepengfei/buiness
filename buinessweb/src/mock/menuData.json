@@ -1,0 +1,364 @@
+[
+  {
+    "name": "一级菜单1",
+    "url": "/feiyong",
+    "id": 799,
+    "icon": "icon-caiwu",
+    "children": [
+      {
+        "name": "二级菜单1",
+        "url": "/two-one",
+        "id": 4,
+        "icon": "icon-caiwu",
+        "children": [
+          {
+            "name": "三级菜单1",
+            "url": "/organization",
+            "id": 9901,
+            "children": [
+              {
+                "name": "三级菜单1-列表",
+                "url": "/list",
+                "id": 9902
+              },
+              {
+                "name": "三级菜单1-添加",
+                "url": "/add",
+                "id": "45",
+                "hidden": true
+              },
+              {
+                "name": "三级菜单1-详情",
+                "url": "/:id",
+                "id": "47",
+                "hidden": true
+              }
+            ]
+          },
+          {
+            "name": "三级菜单2",
+            "url": "/organization2",
+            "id": 9903
+          }
+        ]
+      },
+      {
+        "name": "二级菜单2",
+        "url": "/two-two",
+        "id": "6",
+        "icon": "icon-caiwu",
+        "children": [
+          {
+            "name": "三级菜单1",
+            "url": "/tenant",
+            "id": "62",
+            "type": 0
+          },
+          {
+            "name": "三级菜单1",
+            "url": "https://wwww.baidu.com",
+            "id": "61",
+            "icon": "icon-caiwu"
+          },
+          {
+            "name": "三级菜单1",
+            "url": "https://wwww.jjl.com",
+            "id": "61",
+            "icon": "icon-caiwu"
+          }
+        ]
+      },
+      {
+        "name": "二级菜单3",
+        "url": "https://wwww.baidu.com",
+        "id": 52,
+        "icon": "icon-caiwu"
+      },
+      {
+        "name": "二级菜单4",
+        "url": "/duizhang12/:name",
+        "id": 53,
+        "icon": "icon-caiwu"
+      },
+      {
+        "name": "二级菜单41",
+        "url": "/duizhang13",
+        "id": 54,
+        "icon": "icon-caiwu"
+      },
+      {
+        "name": "二级菜单5",
+        "url": "/duizhang14",
+        "id": 55,
+        "icon": "icon-caiwu"
+      },
+      {
+        "name": "二级菜单6",
+        "url": "/duizhang15",
+        "id": 56,
+        "icon": "icon-caiwu"
+      },
+      {
+        "name": "二级菜单7",
+        "url": "/duizhang16",
+        "id": 57,
+        "icon": "icon-caiwu"
+      }
+    ]
+  },
+  {
+    "name": "一级菜单2",
+    "url": "/huoyuan",
+    "id": 780,
+    "icon": "icon-huoyuan",
+    "children": [
+      {
+        "name": "二级菜单1",
+        "url": "/two-one",
+        "id": 5,
+        "icon": "icon-huoyuan",
+        "children": [
+          {
+            "name": "三级菜单1",
+            "url": "/lixiang",
+            "id": 990101,
+            "children": [
+              {
+                "name": "四级菜单1",
+                "url": "/list",
+                "id": 44,
+                "children": [
+                  {
+                    "name": "四级菜单1-列表",
+                    "url": "/list",
+                    "id": 441
+                  },
+                  {
+                    "name": "四级菜单1-新增",
+                    "url": "/add",
+                    "id": 442,
+                    "hidden": true
+                  },
+                  {
+                    "name": "四级菜单1-详情",
+                    "url": "/:id",
+                    "id": 443,
+                    "hidden": true
+                  }
+                ]
+              },
+              {
+                "name": "四级菜单详情",
+                "url": "/listDetail",
+                "hidden": true,
+                "id": 403
+              },
+              {
+                "name": "四级菜单2",
+                "url": "/list3",
+                "id": 444
+              },
+              {
+                "name": "四级菜单3",
+                "url": "/list4",
+                "id": 44433,
+                "children": [
+                  {
+                    "name": "五级菜单加长加长1",
+                    "url": "/child",
+                    "id": 888,
+                    "children": [
+                      {
+                        "name": "五级菜单加长加长1-列表",
+                        "url": "/list",
+                        "id": 8881
+                      },
+                      {
+                        "name": "五级菜单加长加长1-新增",
+                        "url": "/add",
+                        "id": 8882,
+                        "hidden": true
+                      },
+                      {
+                        "name": "五级菜单加长加长1-详情",
+                        "url": "/:id",
+                        "id": 8883,
+                        "hidden": true
+                      }
+                    ]
+                  },
+                  {
+                    "name": "五级菜单加长加长加长加长加长2",
+                    "url": "/child2",
+                    "id": 899
+                  },
+                  {
+                    "name": "五级菜单加长加长加长加长3",
+                    "url": "/child3",
+                    "id": 8939
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "二级菜单2",
+        "url": "/duizhang12",
+        "id": 53,
+        "icon": "icon-huoyuan",
+        "children": [
+          {
+            "name": "三级菜单1",
+            "url": "/list",
+            "id": 92
+          }
+        ]
+      },
+      {
+        "name": "二级菜单3",
+        "url": "/duizhang13",
+        "id": 54,
+        "icon": "icon-huoyuan"
+      },
+      {
+        "name": "二级菜单4",
+        "url": "/duizhang14",
+        "id": 55,
+        "icon": "icon-huoyuan"
+      },
+      {
+        "name": "二级菜单5",
+        "url": "/duizhang15",
+        "id": 56,
+        "icon": "icon-huoyuan"
+      },
+      {
+        "name": "二级菜单6",
+        "url": "/duizhang16",
+        "id": 57,
+        "icon": "icon-huoyuan"
+      }
+    ]
+  },
+  {
+    "name": "一级菜单3",
+    "url": "/caiwu",
+    "id": 781,
+    "icon": "icon-caiwu",
+    "children": [
+      {
+        "name": "二级菜单1",
+        "url": "/list1",
+        "id": 50,
+        "icon": "icon-caiwu"
+      },
+      {
+        "name": "二级菜单2",
+        "url": "/list2",
+        "id": 51,
+        "icon": "icon-caiwu"
+      }
+    ]
+  },
+  {
+    "name": "一级菜单444",
+    "url": "/tongji",
+    "id": 789,
+    "icon": "icon-tongji",
+    "children": [
+      {
+        "name": "二级菜单1",
+        "url": "/tongji1",
+        "id": 50,
+        "icon": "icon-tongji",
+        "children": [
+          {
+            "name": "三级菜单1",
+            "url": "/fenxi",
+            "id": 501
+          },
+          {
+            "name": "三级菜单2",
+            "url": "/fenxi1",
+            "id": 502
+          }
+        ]
+      },
+      {
+        "name": "二级菜单2",
+        "url": "/duizhang",
+        "id": 51,
+        "icon": "icon-tongji",
+        "children": [
+          {
+            "name": "三级菜单11111",
+            "url": "/qingdan",
+            "id": 5101
+          },
+          {
+            "name": "三级菜单222222",
+            "url": "/fenbu",
+            "id": 5102
+          }
+        ]
+      },
+      {
+        "name": "二级菜单3",
+        "url": "/duizhang11",
+        "id": 52,
+        "icon": "icon-tongji"
+      },
+      {
+        "name": "二级菜单4",
+        "url": "/duizhang12",
+        "id": 53,
+        "icon": "icon-tongji"
+      },
+      {
+        "name": "二级菜单4",
+        "url": "/duizhang13",
+        "id": 54,
+        "icon": "icon-tongji"
+      },
+      {
+        "name": "二级菜单5",
+        "url": "/duizhang14",
+        "id": 55,
+        "icon": "icon-tongji"
+      },
+      {
+        "name": "二级菜单6",
+        "url": "/duizhang15",
+        "id": 56,
+        "icon": "icon-tongji"
+      },
+      {
+        "name": "二级菜单7",
+        "url": "/duizhang16",
+        "id": 57,
+        "icon": "icon-tongji"
+      }
+    ]
+  },
+  {
+    "name": "一级菜单5",
+    "url": "https://wwww.baidu.com",
+    "id": 104,
+    "icon": "icon-kefu"
+  },
+  {
+    "name": "一级菜单6",
+    "url": "/yingxiao/:id",
+    "id": 105,
+    "icon": "icon-yingxiao"
+  },
+  {
+    "name": "一级菜单7",
+    "url": "https://www.baidu.com",
+    "id": 106,
+    "icon": "icon-yingxiao",
+    "hidden": true
+  }
+]

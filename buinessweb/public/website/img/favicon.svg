@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Centremix 品牌图标：白底 + 橙色大写 C（更大更粗）+ entremix 左偏 5px -->
+  <rect width="64" height="64" rx="10" fill="#FFFFFF"/>
+
+  <!-- 大写 C：圆心 (32,32)、半径 24（↑ from 21）、描边 10（↑ from 7）；开口 ±60°
+       视觉外沿 left=3 / top=3 / bottom=61，占满画布更醒目 -->
+  <path d="M 44 11.22 A 24 24 0 1 0 44 52.78"
+        fill="none"
+        stroke="#DE6420"
+        stroke-width="10"
+        stroke-linecap="round"/>
+
+  <!-- entremix：X 由 28.5 → 23.5（左偏 5px），Y 由 40 → 42（配合更大的 C，偏下更明显）
+       字号 6 + 微负字距，宽度约 25.5，居中在 C 内腔 -->
+  <text x="39.5" y="42"
+        text-anchor="middle"
+        font-family="'Helvetica Neue', Helvetica, Arial, 'PingFang SC', system-ui, sans-serif"
+        font-size="10"
+        font-weight="700"
+        letter-spacing="-0.1"
+        fill="#DE6420">entremix</text>
+</svg>

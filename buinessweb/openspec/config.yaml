@@ -1,0 +1,30 @@
+schema: spec-driven
+
+context: |
+  项目：bigscreenweb（中煤新疆公司数据管理平台·大屏端），Vue 3 + TypeScript + Vite + Pinia + Element Plus + ECharts，包管理用 pnpm。
+  验证命令：pnpm dev / build / test:unit（Vitest + happy-dom）/ lint（oxlint + eslint 双重）/ type-check。
+  工程规范以 .trae/rules/ 为准（组件、TS、样式、命名、路由、测试、注释等）。
+  开发流程：新功能先 brainstorming 澄清需求，再经 openspec 管理变更（proposal/specs/design/tasks），实施遵循 TDD（先写失败测试），完成前必须 lint + type-check + test:unit + build 全绿。
+  技能入口见 .trae/skills/README.md；后端接口契约以 docs/api.json 为准，涉及接口的变更先用 sync-api-docs 技能同步。
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing
