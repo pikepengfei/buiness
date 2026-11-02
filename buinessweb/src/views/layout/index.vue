@@ -45,8 +45,6 @@ const pageComponentKey = computed(() => `${route.path}#${tagsViewStore.refreshSe
 /** 二级路由缓存列表 */
 const keepStore = useKeepAliveStore();
 const secondKeepAliveRoute = keepStore.secondKeepAliveRoute;
-/** 菜单展开/收起图标 */
-const collapseUrl = ref('icon-shouqi');
 
 /** 顶部一级菜单（过滤隐藏路由） */
 const menuListFront = computed(() => {
@@ -103,9 +101,7 @@ watch(isCollapse, (newVal) => {
   const commonLayout = document.querySelector('.common-layout') as HTMLElement | null;
   if (!commonLayout) return;
   const asideWidth = newVal ? '64px' : '210px';
-  const icon = newVal ? 'icon-zhankai' : 'icon-shouqi';
   commonLayout.style.setProperty('--zm-el-aside-width', asideWidth);
-  collapseUrl.value = icon;
 });
 
 onMounted(() => {
@@ -126,7 +122,6 @@ onActivated(() => {});
         :firstRouteUrl="firstRouteUrl"
         :isCollapse="isCollapse"
         @handle-collapse="handleCollapse"
-        :collapseUrl="collapseUrl"
         v-if="showMenu() && menuListReactive.length > 0"
       />
       <el-container class="app-main">

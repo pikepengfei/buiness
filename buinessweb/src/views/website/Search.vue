@@ -42,10 +42,10 @@ function onEnter(e: KeyboardEvent) {
 }
 
 function goProduct(slug: string) {
-  router.push(`/products/${slug}`);
+  router.push(`/product/${slug}`);
 }
 function goArticle(slug: string) {
-  router.push(`/news/${slug}`);
+  router.push(`/article/${slug}`);
 }
 </script>
 
@@ -91,12 +91,12 @@ function goArticle(slug: string) {
               :key="'p' + p.id"
               @click="goProduct(p.slug)"
             >
-              <img :src="p.cover_image || '/website/img/prod/cube-closeup.png'" :alt="p.name" />
+              <img v-if="p.cover_image" :src="p.cover_image" :alt="p.name" loading="lazy" />
               <div class="si-body">
                 <h4>{{ p.name }}</h4>
                 <p>{{ p.summary || '' }}</p>
               </div>
-              <span class="si-tag">{{ p.category || '存储产品' }}</span>
+              <span v-if="p.category" class="si-tag">{{ p.category }}</span>
             </div>
           </div>
 
@@ -112,7 +112,7 @@ function goArticle(slug: string) {
                 <h4>{{ a.title }}</h4>
                 <p>{{ a.summary || '' }}</p>
               </div>
-              <span class="si-tag">{{ a.category || (a.tags && a.tags[0]) || 'NEWS' }}</span>
+              <span v-if="a.category || (a.tags && a.tags.length)" class="si-tag">{{ a.category || a.tags[0] }}</span>
             </div>
           </div>
         </div>

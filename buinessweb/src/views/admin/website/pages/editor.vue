@@ -282,7 +282,10 @@ function goBack() {
       <div class="ed-col ed-preview">
         <div class="ed-col-head">
           <span>实时预览（草稿）</span>
-          <a class="ed-open" :href="slug === 'home' ? '/' : `/${slug}`" target="_blank">查看线上 ↗</a>
+          <span class="ed-open-group">
+            <a class="ed-open" :href="`/preview/${slug}`" target="_blank">预览草稿 ↗</a>
+            <a class="ed-open" :href="slug === 'home' ? '/' : `/${slug}`" target="_blank">查看线上 ↗</a>
+          </span>
         </div>
         <div class="ed-canvas-wrap">
           <div class="ed-canvas web-scope" :style="{ transform: `scale(${scale})` }">
@@ -409,6 +412,10 @@ function goBack() {
   font-size: 12px;
   color: var(--el-color-primary);
   text-decoration: none;
+}
+.ed-open-group {
+  display: inline-flex;
+  gap: 10px;
 }
 /* 左栏 */
 .ed-block-list {

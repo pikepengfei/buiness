@@ -107,17 +107,22 @@ CREATE TRIGGER trg_site_settings_updated_at BEFORE UPDATE ON site_settings
 COMMENT ON TABLE site_settings IS '全局配置：站点名称、Slogan、联系方式、SEO、社媒链接';
 
 -- 2.2 导航菜单（支持多级树） -------------------------------------------------
+-- location 决定这一条挂在官网哪个导航位；页脚/CTA 与顶栏共用一表，
+-- 因此 url 唯一性只约束顶栏（同一链接允许在页脚重复出现，也允许列标题不带链接）。
 CREATE TABLE menus (
   id         BIGSERIAL PRIMARY KEY,
   parent_id  BIGINT REFERENCES menus(id) ON DELETE CASCADE,
   title      VARCHAR(50)  NOT NULL,
-  url        VARCHAR(255) NOT NULL UNIQUE,          -- 导航项 URL 唯一，保证种子可幂等写入
+  url        VARCHAR(255),                          -- 导航链接；footer 顶级分组为列标题，可为空
   target     VARCHAR(10)  DEFAULT '_self',          -- _self / _blank
+  location   VARCHAR(20)  NOT NULL DEFAULT 'header'
+               CHECK (location IN ('header', 'footer', 'cta')),
   sort       INT          NOT NULL DEFAULT 0,
   status     SMALLINT     NOT NULL DEFAULT 1,       -- 1=显示 0=隐藏
   created_at TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_menus_parent ON menus(parent_id, sort);
+CREATE UNIQUE INDEX menus_header_url_key ON menus(url) WHERE location = 'header';
 
 -- =============================================================================
 -- 3. 内容管理 (CMS)
@@ -152,29 +157,73 @@ CREATE TABLE article_categories (
   created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 
--- 3.3 资讯 / 文章 ------------------------------------------------------------
+-- 3.3 资讯 / 文章（发布表：对外可见，只读且不可删除，唯一动作是下线） ----------
+-- 本表只放正在上线的条目，一行 = 一份线上内容。改写它的只有两个动作：
+-- 发布（未发布行整行搬入）与下线（整行搬回 article_drafts）。见 migrations/012_article_online_readonly.sql
 CREATE TABLE articles (
   id           BIGSERIAL PRIMARY KEY,
-  slug         VARCHAR(100) NOT NULL UNIQUE,
+  uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：跨表搬运不改，本表内唯一；审计 entity_id 记本列
+  slug         VARCHAR(100) NOT NULL UNIQUE,       -- 线上标识，决定官网地址 /article/{slug}
   title        VARCHAR(200) NOT NULL,
   cover_image  TEXT,
   summary      VARCHAR(400),
-  body         TEXT,                                -- 富文本 / HTML（后端做 XSS 清洗）
+  body         TEXT,                               -- 线上正文（XSS 清洗后），只由发布动作整行搬运进来，编辑动作写不到这里
   category_id  BIGINT REFERENCES article_categories(id) ON DELETE SET NULL,
   tags         JSONB        NOT NULL DEFAULT '[]'::jsonb,
-  author       VARCHAR(50),
-  status       SMALLINT     NOT NULL DEFAULT 0 CHECK (status IN (0,1,2)), -- 0=草稿 1=已发布 2=已下线
+  author       VARCHAR(50),                        -- 稿件来源署名（对外），与「后台谁改的」无关
+  status       SMALLINT     NOT NULL DEFAULT 1 CHECK (status = 1), -- 恒 1，只作已上线标记；下线状态见 article_drafts.state
   published_at TIMESTAMPTZ,
-  view_count   INT          NOT NULL DEFAULT 0,
+  view_count   INT          NOT NULL DEFAULT 0,    -- 由显式上报累加；发布与下线都随行搬运，不清零
   created_by   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by   BIGINT REFERENCES users(id) ON DELETE SET NULL, -- 最后修改人，不是创建人；每个写路径刷新
   created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX articles_uid_key ON articles(uid);
 CREATE TRIGGER trg_articles_updated_at BEFORE UPDATE ON articles
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE INDEX idx_articles_cat     ON articles(category_id);
 CREATE INDEX idx_articles_status  ON articles(status, published_at DESC);
 CREATE INDEX idx_articles_search  ON articles USING gin(to_tsvector('simple', title || ' ' || coalesce(summary,'') || ' ' || coalesce(body,'')));
+
+-- 3.3.1 资讯未发布内容（草稿表：对外不可见，所有编辑动作与删除的唯一落点） ------
+-- state=0 从未发布的草稿；state=2 曾上线、下线时整行搬回的条目（可编辑、可删除、可重新发布）。
+-- 一条条目同一时刻只存在于一张表，故没有「是否存在未发布改动」这一概念。
+-- 迁移先后：011（建本表与副本机制）→ 012（加 uid/updated_by/state、回收下线行、DROP published_id）
+CREATE TABLE article_drafts (
+  id           BIGSERIAL PRIMARY KEY,
+  uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：与 articles.uid 同值随行搬运，不得重新生成
+  slug         VARCHAR(100) NOT NULL UNIQUE,       -- 未发布标识，与 articles.slug 跨两表共同判唯一
+  title        VARCHAR(200) NOT NULL,
+  cover_image  TEXT,
+  summary      VARCHAR(400),
+  body         TEXT,                               -- 未发布正文，官网任何公开接口都不读取本表
+  category_id  BIGINT REFERENCES article_categories(id) ON DELETE SET NULL,
+  tags         JSONB        NOT NULL DEFAULT '[]'::jsonb,
+  author       VARCHAR(50),
+  state        SMALLINT     NOT NULL DEFAULT 0 CHECK (state IN (0,2)), -- 0=草稿 2=已下线；已上线不写本表，故无 1
+  view_count   INT          NOT NULL DEFAULT 0,    -- 随行搬运的浏览计数：下线带下来、发布搬回去，不因换表清零
+  published_at TIMESTAMPTZ,                        -- 随行搬运的首次发布时间：再发布不覆盖；纯草稿为 NULL
+  created_by   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by   BIGINT REFERENCES users(id) ON DELETE SET NULL, -- 最后修改人，不是创建人
+  created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX article_drafts_uid_key ON article_drafts(uid);
+CREATE INDEX idx_article_drafts_cat ON article_drafts(category_id);
+CREATE TRIGGER trg_article_drafts_updated_at BEFORE UPDATE ON article_drafts
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- 3.3.2 资讯浏览判重明细（同一访客 24 小时内重复访问不计数，按周清理） -----------
+-- 外键带 ON DELETE CASCADE：下线本身就是「移除线上行」，明细随之清空、不留孤儿。
+-- 后果是「下线—再上线」会重置该条的判重窗口（同一访客至多多计一次），本 change 接受这条有界偏差
+CREATE TABLE article_view_dedupe (
+  id          BIGSERIAL PRIMARY KEY,
+  article_id  BIGINT       NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+  visitor_key VARCHAR(64)  NOT NULL,               -- IP 哈希 + UA 摘要
+  seen_at     TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_article_view_dedupe_window ON article_view_dedupe(article_id, visitor_key, seen_at);
 
 -- 3.4 产品分类（支持多级） ---------------------------------------------------
 CREATE TABLE product_categories (
@@ -188,32 +237,71 @@ CREATE TABLE product_categories (
 );
 CREATE INDEX idx_prod_cat_parent ON product_categories(parent_id, sort);
 
--- 3.5 产品 -------------------------------------------------------------------
+-- 3.5 产品（发布表：对外可见，只读且不可删除，唯一动作是下架 + 调整排序值） ------
+-- 本表只放正在上架的产品，一行 = 一份线上内容。改写它的只有三个动作：
+-- 发布（未上线行整行搬入）、下架（整行搬回 product_drafts）、调整列表排序值。
+-- 见 migrations/010_product_flow.sql
 CREATE TABLE products (
   id           BIGSERIAL PRIMARY KEY,
-  slug         VARCHAR(120) NOT NULL UNIQUE,
+  uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：跨表搬运不改，本表内唯一；审计 entity_id 记本列
+  slug         VARCHAR(120) NOT NULL UNIQUE,       -- 线上标识，决定官网地址 /product/{slug}
   name         VARCHAR(160) NOT NULL,
   category_id  BIGINT REFERENCES product_categories(id) ON DELETE SET NULL,
   series       VARCHAR(80),                         -- 产品系列，如 Exos / BarraCuda / LaCie
   cover_image  TEXT,
-  gallery      JSONB        NOT NULL DEFAULT '[]'::jsonb, -- 图集 object_key 数组
+  gallery      JSONB        NOT NULL DEFAULT '[]'::jsonb, -- 图集：可直接渲染的图片地址数组（≤8），不是 object_key
   summary      VARCHAR(400),
-  description  TEXT,
-  specs        JSONB        NOT NULL DEFAULT '{}'::jsonb, -- 参数表（键值对数组）
-  highlights   JSONB        NOT NULL DEFAULT '[]'::jsonb, -- 卖点
+  description  TEXT,                                -- 详细描述（XSS 清洗后的富文本），可为空
+  specs        JSONB        NOT NULL DEFAULT '[]'::jsonb, -- 规格参数 {label,value} 有序数组（≤20，行序即展示序）
+  highlights   JSONB        NOT NULL DEFAULT '[]'::jsonb, -- 卖点（≤8）
   price_text   VARCHAR(60),                         -- 展示价（避免货币精度问题，存文本）
   buy_link     TEXT,                                -- 天猫 / 京东 外链
-  status       SMALLINT     NOT NULL DEFAULT 1 CHECK (status IN (0,1)),  -- 1=上架 0=下架
-  sort         INT          NOT NULL DEFAULT 0,
+  status       SMALLINT     NOT NULL DEFAULT 1 CHECK (status = 1), -- 恒 1，只作已上架标记；已下架状态见 product_drafts.state
+  sort         INT          NOT NULL DEFAULT 0,     -- 线上行唯一可写列，只由 POST /products/:id/sort 改写
+  published_at TIMESTAMPTZ,                         -- 首次上架时间：发布写入一次，再上架不覆盖
   created_by   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by   BIGINT REFERENCES users(id) ON DELETE SET NULL, -- 最后修改人，不是创建人；每个写路径刷新
   created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+CREATE UNIQUE INDEX products_uid_key ON products(uid);
 CREATE TRIGGER trg_products_updated_at BEFORE UPDATE ON products
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE INDEX idx_products_cat    ON products(category_id);
 CREATE INDEX idx_products_status ON products(status, sort);
 CREATE INDEX idx_products_search ON products USING gin(to_tsvector('simple', name || ' ' || coalesce(summary,'') || ' ' || coalesce(series,'')));
+
+-- 3.5.1 产品未上架内容（草稿表：对外不可见，所有编辑动作与删除的唯一落点） ------
+-- state=0 从未上架的草稿；state=2 曾上架、下架时整行搬回的产品（可编辑、可删除、可重新发布）。
+-- 一条产品同一时刻只存在于一张表，故没有「是否存在未发布改动」这一概念。
+-- 与资讯链 011→012 是不同表与不同约束，仅编号连续登记、无执行顺序依赖。
+CREATE TABLE product_drafts (
+  id           BIGSERIAL PRIMARY KEY,
+  uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：与 products.uid 同值随行搬运，不得重新生成
+  slug         VARCHAR(120) NOT NULL UNIQUE,       -- 未上架标识，与 products.slug 跨两表共同判唯一
+  name         VARCHAR(160) NOT NULL,
+  category_id  BIGINT REFERENCES product_categories(id) ON DELETE SET NULL,
+  series       VARCHAR(80),
+  cover_image  TEXT,
+  gallery      JSONB        NOT NULL DEFAULT '[]'::jsonb,
+  summary      VARCHAR(400),
+  description  TEXT,                                -- 未上架描述，官网任何公开接口都不读取本表
+  specs        JSONB        NOT NULL DEFAULT '[]'::jsonb,
+  highlights   JSONB        NOT NULL DEFAULT '[]'::jsonb,
+  price_text   VARCHAR(60),
+  buy_link     TEXT,
+  state        SMALLINT     NOT NULL DEFAULT 0 CHECK (state IN (0,2)), -- 0=草稿 2=已下架；已上架不写本表，故无 1
+  sort         INT          NOT NULL DEFAULT 0,     -- 随行搬运的排序值：下架带下来、再上架搬回去，不因换表重置
+  published_at TIMESTAMPTZ,                         -- 随行搬运的首次上架时间：再上架不覆盖；纯草稿为 NULL
+  created_by   BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_by   BIGINT REFERENCES users(id) ON DELETE SET NULL, -- 最后修改人，不是创建人
+  created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX product_drafts_uid_key ON product_drafts(uid);
+CREATE INDEX idx_product_drafts_cat ON product_drafts(category_id);
+CREATE TRIGGER trg_product_drafts_updated_at BEFORE UPDATE ON product_drafts
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- 3.6 Banner / 广告位 --------------------------------------------------------
 CREATE TABLE banners (
@@ -275,7 +363,8 @@ CREATE TABLE inquiries (
   email       VARCHAR(120),
   company     VARCHAR(120),
   need_type   VARCHAR(40),                          -- 批量采购 / 定制 / 渠道
-  product_id  BIGINT REFERENCES products(id) ON DELETE SET NULL,
+  product_id  BIGINT REFERENCES products(id) ON DELETE SET NULL, -- 提交时指向的线上行主键；产品下架后被置空
+  product_uid UUID,                                 -- 提交时那条产品的内容身份：跨表搬运与再发布都不变，线索追溯用它
   message     TEXT,
   status      SMALLINT     NOT NULL DEFAULT 0 CHECK (status IN (0,1,2,3)),
   handled_by  BIGINT REFERENCES users(id) ON DELETE SET NULL,
@@ -287,6 +376,7 @@ CREATE TABLE inquiries (
 CREATE TRIGGER trg_inquiries_updated_at BEFORE UPDATE ON inquiries
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE INDEX idx_inquiries_status ON inquiries(status, created_at DESC);
+CREATE INDEX idx_inquiries_product_uid ON inquiries(product_uid);
 
 -- 4.2 合作意向表单 -----------------------------------------------------------
 CREATE TABLE cooperation (
@@ -379,6 +469,7 @@ INSERT INTO site_settings (key, value, group_name, label, description) VALUES
   ('site_name',     'Centremix 芯联创',        'general', '站点名称',   '官网标题'),
   ('slogan',        '聚焦你的多元，存储你的生活', 'general', '品牌 Slogan', '核心标语'),
   ('brand_color',   '#DE6420',                  'general', '品牌主色',   'VIS 规范橙（与官网设计稿 style.css 一致；设计分析曾提红 #E40013，以 VIS 硬约束与实现稿为准）'),
+  ('logo_url',      '/website/img/logo-orange.png', 'general', '品牌 Logo', '官网左上角 Logo；后台上传后改为 /uploads/brand/logo.<ext>?v=版本号'),
   ('company_name',  '北京展创振华科技有限公司',     'general', '公司全称',   '工商主体'),
   ('contact_email', 'info@centremix.com',       'contact', '联系邮箱',   '对外邮箱'),
   ('contact_phone', '010-62887359',             'contact', '联系电话',   '对外电话'),
@@ -390,10 +481,11 @@ INSERT INTO site_settings (key, value, group_name, label, description) VALUES
   ('social_xhs',    'https://www.xiaohongshu.com', 'social', '小红书',    '外链')
 ON CONFLICT (key) DO NOTHING;
 
-INSERT INTO menus (parent_id, title, url, sort) VALUES
-  (NULL, '首页',     '/',            1),
-  (NULL, '关于我们', '/about',       2),
-  (NULL, '产品中心', '/products',    3),
-  (NULL, '新闻咨询', '/news',        4),
-  (NULL, '售后服务', '/contact',     5)
-ON CONFLICT (url) DO NOTHING;
+-- 顶栏导航种子；页脚两列与右上角 CTA 由 migrations/004_menu_locations.sql 种入
+INSERT INTO menus (location, parent_id, title, url, sort) VALUES
+  ('header', NULL, '首页',     '/',            1),
+  ('header', NULL, '关于我们', '/about',       2),
+  ('header', NULL, '产品中心', '/products',    3),
+  ('header', NULL, '新闻资讯', '/news',        4),
+  ('header', NULL, '售后服务', '/contact',     5)
+ON CONFLICT (url) WHERE location = 'header' DO NOTHING;

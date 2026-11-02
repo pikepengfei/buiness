@@ -67,6 +67,40 @@ export function sanitize(input: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// 正文图片归属与正文下限（草稿表与发布表共用同一实现）
+// ---------------------------------------------------------------------------
+// 站内素材地址：本地存储的上传目录、前端内置资产、云端对象存储公共读前缀。
+// data: 内联图片不在其中——正文图片只能从素材库选取，不接受内联字节与站外链接
+export function isInternalMediaSrc(raw: unknown): boolean {
+  const src = String(raw ?? '').trim();
+  if (src.startsWith('/uploads/') || src.startsWith('/website/')) return true;
+  const base = config.storage.publicBase.replace(/\/$/, '');
+  return !!base && src.startsWith(`${base}/`);
+}
+
+// 剥除站外图片节点，保留其余文字与结构。入参 MUST 是 sanitize() 之后的 HTML：
+// 属性值里的 < > " 已被转义、标签形态固定，才可按标签边界匹配而不误伤正文
+export function stripForeignImages(cleaned: string): { html: string; removed: number } {
+  let removed = 0;
+  const html = String(cleaned ?? '').replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = /src="([^"]*)"/i.exec(tag)?.[1];
+    if (src && isInternalMediaSrc(src)) return tag;
+    removed++;
+    return '';
+  });
+  return { html, removed };
+}
+
+// 正文下限：清洗后不含实际文字即视为空（空串、纯空白、<p></p>、只剩图片都算空）。
+// 保存与发布、前后端判定口径必须一致，故在此单点定义
+export function hasVisibleText(html: unknown): boolean {
+  const text = String(html ?? '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;|&#160;|\s/gi, '');
+  return text.length > 0;
+}
+
+// ---------------------------------------------------------------------------
 // 统一响应 & 分页
 // ---------------------------------------------------------------------------
 export function ok(reply: any, data: any = null, meta?: any) {

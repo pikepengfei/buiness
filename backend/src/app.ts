@@ -12,9 +12,12 @@ import { ErrCode, bizCodeFromStatus, isUniqueViolation, isForeignKeyViolation } 
 export async function buildApp() {
   const app = Fastify({ logger: true });
 
+  // 单文件 20MB：同时用于 multipart 限制与 413 的提示文案，避免两处口径漂移
+  const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
+
   await app.register(cors, { origin: config.frontendOrigin.split(',').map((s) => s.trim()), credentials: true });
   await app.register(rateLimit, { max: config.rateLimit.max, timeWindow: config.rateLimit.windowMs });
-  await app.register(multipart, { limits: { fileSize: 20 * 1024 * 1024 } }); // 单文件 20MB
+  await app.register(multipart, { limits: { fileSize: MAX_UPLOAD_BYTES } });
 
   // 本地存储模式：将 ./uploads 以 /uploads 路径对外提供（生产请用对象存储公共读 + CDN）
   if (usingLocalStorage) {
@@ -40,6 +43,10 @@ export async function buildApp() {
     if (isUniqueViolation(err)) return reply.code(409).send({ code: ErrCode.SLUG_EXISTS, message: '记录已存在（唯一字段冲突）', data: null });
     // 外键冲突（如所选分类已被删除）→ 归为参数类错误（400），避免暴露数据库细节
     if (isForeignKeyViolation(err)) return reply.code(400).send({ code: ErrCode.RELATION_NOT_FOUND, message: '关联记录不存在，请检查所选分类等关联项', data: null });
+    // 上传超出 multipart 大小限制：属于客户端可修正的错误，不能落到 9xxx 内部错误码
+    if (err.statusCode === 413) {
+      return reply.code(413).send({ code: ErrCode.FILE_TOO_LARGE, message: `文件超过 ${MAX_UPLOAD_BYTES / 1024 / 1024}MB 上限`, data: null });
+    }
     const status = err.statusCode && err.statusCode >= 400 ? err.statusCode : 500;
     reply.code(status).send({ code: bizCodeFromStatus(status), message: err.message || '服务器内部错误', data: null });
   });

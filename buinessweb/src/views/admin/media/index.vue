@@ -1,16 +1,16 @@
 <script setup lang="ts">
 /**
- * 素材库：网格浏览 + 分类/关键词筛选 + 分页 + 本地直传上传 + 改名/归类 + 复制地址 + 删除
+ * 素材库：网格浏览 + 分类/关键词筛选 + 分页 + 本地直传上传（多选/拖拽）+ 改名/归类 + 复制地址 + 删除
  * 删除由后端扫描内容引用，被引用时返回 409 并在 message 中列出引用位置
  */
 import { onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { cmsAdmin } from '@/api/cms';
+import { useMediaUpload, type UploadResult } from '@/hooks/useMediaUpload';
 import type { MediaItem } from '@/types/cms';
 
 const list = ref<MediaItem[]>([]);
 const loading = ref(false);
-const uploading = ref(false);
 const page = ref(1);
 const pageSize = ref(24);
 const total = ref(0);
@@ -42,22 +42,49 @@ function applyFilter() {
 }
 onMounted(load);
 
-async function onFile(ev: Event) {
-  const input = ev.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  uploading.value = true;
-  try {
-    await cmsAdmin.media.uploadDirect(file, 'website');
-    ElMessage.success('上传成功');
+const { uploading, done, total: upTotal, upload } = useMediaUpload('website');
+// el-button 渲染成 <button>，本身是 labelable 元素，用 label 包裹时点击只会落在按钮上、
+// 永远不会触发文件选择框；改为按钮显式调用隐藏 input
+const fileInput = ref<HTMLInputElement | null>(null);
+const pickFiles = () => fileInput.value?.click();
+// dragenter/dragleave 会在子元素间反复触发，用计数器而不是布尔值判断是否离开
+const dragDepth = ref(0);
+
+function summarize(r: UploadResult) {
+  const parts: string[] = [];
+  if (r.urls.length) parts.push(`成功 ${r.urls.length} 个`);
+  if (r.failures.length) parts.push(`失败 ${r.failures.length} 个`);
+  if (r.skipped) parts.push(`超出单批上限跳过 ${r.skipped} 个`);
+  if (!parts.length) return '没有可上传的文件';
+  if (!r.failures.length) return `已上传 ${r.urls.length} 个素材`;
+  const detail = r.failures.slice(0, 3).map((f) => `${f.name}：${f.reason}`).join('；');
+  return `${parts.join('，')}（${detail}${r.failures.length > 3 ? ' 等' : ''}）`;
+}
+
+async function handleFiles(files: File[]) {
+  if (!files.length || uploading.value) return;
+  const res = await upload(files);
+  if (res.urls.length) {
     page.value = 1;
     load();
-  } catch (e: any) {
-    ElMessage.error(e?.message || '上传失败');
-  } finally {
-    uploading.value = false;
-    input.value = '';
   }
+  ElMessage({
+    message: summarize(res),
+    type: res.failures.length ? (res.urls.length ? 'warning' : 'error') : 'success',
+    duration: res.failures.length ? 6000 : 3000,
+    showClose: res.failures.length > 0,
+  });
+}
+
+function onFiles(ev: Event) {
+  const input = ev.target as HTMLInputElement;
+  handleFiles(Array.from(input.files || []));
+  input.value = '';
+}
+
+function onDrop(ev: DragEvent) {
+  dragDepth.value = 0;
+  handleFiles(Array.from(ev.dataTransfer?.files || []));
 }
 
 async function copyUrl(item: MediaItem) {
@@ -121,40 +148,51 @@ async function remove(item: MediaItem) {
       <div class="hd">
         <span class="hd-t">素材库（{{ total }}）</span>
         <div class="hd-ops">
+          <span class="hd-tip">支持多选 / 拖拽上传，单文件 ≤ 20MB</span>
           <el-select v-model="filterCategory" placeholder="全部分类" clearable size="small" style="width: 150px" @change="applyFilter" @clear="applyFilter">
             <el-option v-for="c in categories" :key="c" :label="c" :value="c" />
           </el-select>
           <el-input v-model="keyword" placeholder="搜索素材名称" clearable size="small" style="width: 180px" @change="applyFilter" @clear="applyFilter" @keyup.enter="applyFilter" />
           <el-button @click="load">刷新</el-button>
-          <label class="up-btn">
-            <el-button type="primary" :loading="uploading">上传图片</el-button>
-            <input type="file" accept="image/*" hidden @change="onFile" />
-          </label>
+          <el-button type="primary" :loading="uploading" @click="pickFiles">
+            {{ uploading ? `上传中 ${done}/${upTotal}` : '上传图片' }}
+          </el-button>
+          <input ref="fileInput" type="file" accept="image/*" multiple hidden @change="onFiles" />
         </div>
       </div>
     </template>
 
-    <div v-loading="loading" class="md-grid">
-      <div v-for="m in list" :key="m.id" class="md-cell">
-        <div class="md-thumb">
-          <img :src="m.url" :alt="m.original_name || m.filename" loading="lazy" />
-        </div>
-        <div class="md-info">
-          <div class="md-name" :title="m.original_name || m.filename">{{ m.original_name || m.filename }}</div>
-          <div class="md-meta">
-            <span>{{ m.category }}</span>
-            <span v-if="m.width">{{ m.width }}×{{ m.height }}</span>
-            <span>{{ fmtSize(m.size) }}</span>
+    <div
+      class="md-drop"
+      :class="{ 'is-drag': dragDepth > 0 }"
+      @dragenter.prevent="dragDepth++"
+      @dragleave.prevent="dragDepth--"
+      @dragover.prevent
+      @drop.prevent="onDrop"
+    >
+      <div v-if="dragDepth > 0" class="md-drop-hint">松开即可上传（单文件 ≤ 20MB）</div>
+      <div v-loading="loading" class="md-grid">
+        <div v-for="m in list" :key="m.id" class="md-cell">
+          <div class="md-thumb">
+            <img :src="m.url" :alt="m.original_name || m.filename" loading="lazy" />
           </div>
-          <div class="md-ops">
-            <el-button link size="small" type="primary" @click="copyUrl(m)">复制地址</el-button>
-            <a :href="m.url" target="_blank" class="md-open">打开</a>
-            <el-button link size="small" @click="openEdit(m)">改名/归类</el-button>
-            <el-button link size="small" type="danger" @click="remove(m)">删除</el-button>
+          <div class="md-info">
+            <div class="md-name" :title="m.original_name || m.filename">{{ m.original_name || m.filename }}</div>
+            <div class="md-meta">
+              <span>{{ m.category }}</span>
+              <span v-if="m.width">{{ m.width }}×{{ m.height }}</span>
+              <span>{{ fmtSize(m.size) }}</span>
+            </div>
+            <div class="md-ops">
+              <el-button link size="small" type="primary" @click="copyUrl(m)">复制地址</el-button>
+              <a :href="m.url" target="_blank" class="md-open">打开</a>
+              <el-button link size="small" @click="openEdit(m)">改名/归类</el-button>
+              <el-button link size="small" type="danger" @click="remove(m)">删除</el-button>
+            </div>
           </div>
         </div>
+        <el-empty v-if="!loading && !list.length" description="暂无素材，可点击右上角上传或将图片拖到这里" />
       </div>
-      <el-empty v-if="!loading && !list.length" description="暂无素材，点击右上角上传" />
     </div>
 
     <el-pagination
@@ -197,10 +235,37 @@ async function remove(item: MediaItem) {
 }
 .hd-ops {
   display: flex;
+  align-items: center;
   gap: 8px;
 }
-.up-btn {
-  cursor: pointer;
+.hd-tip {
+  font-size: 12px;
+  color: #909399;
+}
+.md-drop {
+  position: relative;
+  padding: 10px;
+  border: 1px dashed transparent;
+  border-radius: 8px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.md-drop.is-drag {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.md-drop-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--el-color-primary);
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.12);
+  pointer-events: none;
 }
 .md-grid {
   display: grid;

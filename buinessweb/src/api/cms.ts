@@ -1,9 +1,12 @@
 import axios from 'axios';
 import type {
   ApiResult, Paginated, SiteConfig, Banner, ProductSummary, ProductDetail, ProductCategory,
-  ArticleSummary, ArticleDetail, ArticleCategory, Page, Faq, AuthUser, LoginPayload,
+  ArticleSummary, ArticleDetail, ArticleCategory, ArticleAdminRow, ArticleEditable,
+  ArticleDraftPayload, ArticleCategoryAdminRow, Page, Faq, AuthUser, LoginPayload,
   InquiryPayload, CooperationPayload, SubscriptionPayload, ContactPayload,
-  PageListRow, ProductAdminRow, ArticleAdminRow, BannerAdminRow, MediaItem,
+  PageListRow, ProductAdminRow, ProductEditable, ProductDraftPayload,
+  ProductCategoryAdminRow, ProductPublishResult, ProductUnpublishResult,
+  BannerAdminRow, MediaItem,
   LeadRow, UserRow, RoleRow, AuditRow, SettingsGrouped, MenuItem,
 } from '@/types/cms';
 import { passwordDigest } from '@/utils/password';
@@ -77,10 +80,19 @@ export const cms = {
     const res = await http.get('/public/products', { params });
     return res.data as ApiResult<ProductSummary[]> | any;
   },
-  getProduct: (slug: string) => unwrap<ProductDetail>(http.get(`/public/products/${slug}`)),
+  // 与 getArticle 同形：不在架（草稿 / 已下架）与写错的标识都回 null，界面按「内容不存在」处理
+  getProduct: (slug: string) => unwrap<ProductDetail | null>(http.get(`/public/products/${slug}`)),
   getProductCategories: () => unwrap<ProductCategory[]>(http.get('/public/product-categories')),
-  getArticles: (params: Record<string, any> = {}) => http.get('/public/articles', { params }),
-  getArticle: (slug: string) => unwrap<ArticleDetail>(http.get(`/public/articles/${slug}`)),
+  // 与 getProductsPaged 同形：列表要同时拿数据与 meta.total，故不解包
+  getArticlesPaged: async (params: Record<string, any> = {}) => {
+    const res = await http.get('/public/articles', { params });
+    return res.data as ApiResult<ArticleSummary[]> | any;
+  },
+  getArticle: (slug: string) => unwrap<ArticleDetail | null>(http.get(`/public/articles/${slug}`)),
+  // 浏览计数显式上报：命中判重时 counted=false，前端不据此改动展示
+  reportArticleView: (slug: string) =>
+    unwrap<{ counted: boolean; reason?: 'not_found' | 'offline' | 'duplicate'; view_count?: number }>(
+      http.post(`/public/articles/${slug}/view`)),
   getArticleCategories: () => unwrap<ArticleCategory[]>(http.get('/public/article-categories')),
   getPage: (slug: string) => unwrap<Page | null>(http.get(`/public/pages/${slug}`)),
   getFaqs: (category?: string) => unwrap<Faq[]>(http.get('/public/faqs', { params: category ? { category } : {} })),
@@ -105,33 +117,72 @@ export const cmsAdmin = {
     unpublish: (id: number) => unwrap(http.post(`/pages/${id}/unpublish`)),
     remove: (id: number) => unwrap(http.delete(`/pages/${id}`)),
   },
-  // 产品
+  // 产品：一条内容同一时刻只存在于一张表，方法按「行在哪张表」分组，id 不跨组混用
+  //   products.*      → 上架表的行 id。在架内容只读，内容动作只有下架；
+  //                     唯一的写路径是 setOnlineSort（只改列表排序值，不碰内容列）。
+  //                     后端的 DELETE /products/:id 是运维兜底端点，刻意不包成前端方法
+  //   productDrafts.* → 未上架表的行 id（草稿与已下架同表）。编辑、发布、删除都从这里发起
+  // 六个写方法都必带 uid（跨表稳定的内容身份标识），服务端断言行 id 与 uid 指向同一行；
+  // 旧签名（create / update / 按上架 id 的 remove、提交 status 的路径）已移除，不留别名
   products: {
     list: (params: Record<string, any> = {}) => unwrapPaged<ProductAdminRow[]>(http.get('/products', { params })),
-    get: (id: number) => unwrap<ProductAdminRow>(http.get(`/products/${id}`)),
-    create: (body: Record<string, any>) => unwrap<{ id: number }>(http.post('/products', body)),
-    update: (id: number, body: Record<string, any>) => unwrap(http.patch(`/products/${id}`, body)),
-    remove: (id: number) => unwrap(http.delete(`/products/${id}`)),
+    getOnline: (id: number) => unwrap<ProductEditable>(http.get(`/products/${id}`)),
+    // 调整在架产品的列表排序值：不需要先下架，也不产生内容改动
+    setOnlineSort: (id: number, uid: string, sort: number) =>
+      unwrap<{ id: number; uid: string; sort: number }>(http.post(`/products/${id}/sort`, { uid, sort })),
+    // 下架 = 整行搬进未上架表并置 state=2：响应回传搬运后的行 id，界面据此进编辑页
+    unpublish: (id: number, uid: string) =>
+      unwrap<ProductUnpublishResult>(http.post(`/products/${id}/unpublish`, { uid })),
+  },
+  productDrafts: {
+    get: (draftId: number) => unwrap<ProductEditable>(http.get(`/products/drafts/${draftId}`)),
+    create: (body: ProductDraftPayload) =>
+      unwrap<{ id: number; uid: string; stripped_images: number }>(http.post('/products/drafts', body)),
+    update: (draftId: number, uid: string, body: ProductDraftPayload) =>
+      unwrap<{ stripped_images: number }>(http.patch(`/products/drafts/${draftId}`, { ...body, uid })),
+    publish: (draftId: number, uid: string) =>
+      unwrap<ProductPublishResult>(http.post(`/products/drafts/${draftId}/publish`, { uid })),
+    // 删除只作用于未上架侧：草稿与已下架的行都能删，删不到任何在架内容
+    remove: (draftId: number, uid: string) =>
+      unwrap(http.delete(`/products/drafts/${draftId}`, { params: { uid } })),
   },
   productCategories: {
-    list: () => unwrap<ProductCategory[]>(http.get('/product-categories')),
+    list: () => unwrap<ProductCategoryAdminRow[]>(http.get('/product-categories')),
     create: (body: Record<string, any>) => unwrap<{ id: number }>(http.post('/product-categories', body)),
     update: (id: number, body: Record<string, any>) => unwrap(http.patch(`/product-categories/${id}`, body)),
+    // 删除保护按两表并集计数：ref_count 非 0 时后端回 409 + 「已上架 X 个、未上架 Y 个」
     remove: (id: number) => unwrap(http.delete(`/product-categories/${id}`)),
   },
-  // 资讯
+  // 资讯：一条内容同一时刻只存在于一张表，方法按「行在哪张表」分组，id 不跨组混用
+  //   articles.*      → 发布表的行 id。线上只读，唯一动作是下线，故这里没有写内容的方法；
+  //                     后端的 DELETE /articles/:id 是运维兜底端点，刻意不包成前端方法
+  //   articleDrafts.* → 未发布表的行 id。编辑、发布、删除都从这里发起
+  // 三个写方法都必带 uid（跨表稳定的内容身份标识），服务端校验行 id 与 uid 指向同一行；
+  // 旧签名（ensureRevision、按发布 id 的 remove、不带 uid 的 update/publish/remove）已移除，不留别名
   articles: {
     list: (params: Record<string, any> = {}) => unwrapPaged<ArticleAdminRow[]>(http.get('/articles', { params })),
-    get: (id: number) => unwrap<ArticleAdminRow>(http.get(`/articles/${id}`)),
-    create: (body: Record<string, any>) => unwrap<{ id: number }>(http.post('/articles', body)),
-    update: (id: number, body: Record<string, any>) => unwrap(http.patch(`/articles/${id}`, body)),
-    publish: (id: number) => unwrap(http.post(`/articles/${id}/publish`)),
-    // 下线：status=2，官网不再展示
-    unpublish: (id: number) => unwrap(http.post(`/articles/${id}/unpublish`)),
-    remove: (id: number) => unwrap(http.delete(`/articles/${id}`)),
+    get: (id: number) => unwrap<ArticleEditable>(http.get(`/articles/${id}`)),
+    // 下线 = 整行搬进未发布表并置 state=2：响应回传搬运后的行 id，界面据此进编辑页
+    unpublish: (id: number) =>
+      unwrap<{ draft_id: number; uid: string; view_count: number }>(http.post(`/articles/${id}/unpublish`)),
+  },
+  articleDrafts: {
+    get: (draftId: number) => unwrap<ArticleEditable>(http.get(`/articles/drafts/${draftId}`)),
+    create: (body: ArticleDraftPayload) =>
+      unwrap<{ id: number; uid: string; stripped_images: number }>(http.post('/articles/drafts', body)),
+    update: (draftId: number, uid: string, body: ArticleDraftPayload) =>
+      unwrap<{ stripped_images: number }>(http.patch(`/articles/drafts/${draftId}`, { ...body, uid })),
+    publish: (draftId: number, uid: string) =>
+      unwrap<{
+        id: number; uid: string; published_at: string; view_count: number;
+        first_published: boolean; stripped_images: number;
+      }>(http.post(`/articles/drafts/${draftId}/publish`, { uid })),
+    // 删除只作用于未发布侧：草稿与已下线的行都能删，删不到任何线上内容
+    remove: (draftId: number, uid: string) =>
+      unwrap(http.delete(`/articles/drafts/${draftId}`, { params: { uid } })),
   },
   articleCategories: {
-    list: () => unwrap<ArticleCategory[]>(http.get('/article-categories')),
+    list: () => unwrap<ArticleCategoryAdminRow[]>(http.get('/article-categories')),
     create: (body: Record<string, any>) => unwrap<{ id: number }>(http.post('/article-categories', body)),
     update: (id: number, body: Record<string, any>) => unwrap(http.patch(`/article-categories/${id}`, body)),
     remove: (id: number) => unwrap(http.delete(`/article-categories/${id}`)),
@@ -154,6 +205,15 @@ export const cmsAdmin = {
   settings: {
     get: () => unwrap<SettingsGrouped>(http.get('/settings')),
     update: (items: { key: string; value: string; groupName?: string; label?: string }[]) => unwrap(http.patch('/settings', items)),
+    /**
+     * 上传官网 Logo：后端以固定命名 brand/logo.<ext> 覆盖写入，并把带版本号的 URL 直接写回
+     * logo_url 设置，因此无需再调 update 保存
+     */
+    uploadLogo: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return unwrap<{ url: string; objectKey: string }>(http.post('/upload/logo', fd));
+    },
   },
   // 导航菜单（树）
   menus: {
@@ -204,6 +264,12 @@ export const cmsAdmin = {
   // 审计日志
   audit: {
     list: (params: Record<string, any> = {}) => unwrapPaged<AuditRow[]>(http.get('/audit', { params })),
+    // 一条资讯的完整改动时间线：entity_id 存的是 uid，所以两次换表（下线、再发布）仍落在同一查询里
+    byArticleUid: (uid: string, params: Record<string, any> = {}) =>
+      unwrapPaged<AuditRow[]>(http.get('/audit', { params: { ...params, entityType: 'article', entityUid: uid } })),
+    // 产品同理：建 → 改 → 发布 → 排序 → 下架 → 改 → 再上架 都按同一个 uid 串起来
+    byProductUid: (uid: string, params: Record<string, any> = {}) =>
+      unwrapPaged<AuditRow[]>(http.get('/audit', { params: { ...params, entityType: 'product', entityUid: uid } })),
   },
 };
 

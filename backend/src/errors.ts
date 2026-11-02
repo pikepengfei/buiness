@@ -39,6 +39,8 @@ export const ErrCode = {
   NO_FILE: 5001,            // 未收到文件
   STORAGE_MODE_MISMATCH: 5002, // 存储模式不匹配
   MEDIA_IN_USE: 5003,       // 素材被内容引用，禁止删除
+  UNSUPPORTED_MEDIA: 5004,  // 文件类型不在图片白名单内
+  FILE_TOO_LARGE: 5005,     // 文件超出大小上限
 
   // --- 9xxx 系统/数据库 ---
   INTERNAL_ERROR: 9001,     // 服务器内部错误

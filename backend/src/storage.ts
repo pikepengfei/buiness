@@ -2,9 +2,9 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { config } from './config.js';
 import { randomUUID } from 'crypto';
-import { extname, resolve, sep } from 'path';
+import { extname, resolve, sep, dirname } from 'path';
 import { mkdirSync } from 'fs';
-import { unlink } from 'fs/promises';
+import { mkdir, unlink, writeFile } from 'fs/promises';
 
 const isLocal = config.storage.driver === 'local';
 
@@ -22,11 +22,38 @@ if (!isLocal) {
 }
 
 // 生成存储对象键：category/yyyyMM/uuid.ext
+// category 会作为对象键首段直接参与本地文件路径拼接，必须先过字符白名单。
+// 模式排除了「.」，从根上杜绝 ".." 之类的目录穿越；非法值静默回退 general，
+// 让上传接口与预签名接口共用同一条收敛路径，不因为调用方忘了校验就漏网。
+const CATEGORY_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+
+export function normalizeCategory(raw: unknown, fallback = 'general'): string {
+  const c = String(raw ?? '').trim().toLowerCase();
+  return CATEGORY_RE.test(c) ? c : fallback;
+}
+
 export function genObjectKey(filename: string, category = 'general'): string {
   const ext = extname(filename).toLowerCase().replace('.', '') || 'bin';
   const d = new Date();
   const ym = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}`;
-  return `${category}/${ym}/${randomUUID()}.${ext}`;
+  return `${normalizeCategory(category)}/${ym}/${randomUUID()}.${ext}`;
+}
+
+// 固定命名对象键：官网要长期引用同一张图（如品牌 Logo）时使用。
+// 不带 uuid，重复上传即同名覆盖，前端引用路径稳定。
+export function fixedObjectKey(category: string, name: string, ext: string): string {
+  return `${normalizeCategory(category)}/${name}.${normalizeExt(ext)}`;
+}
+
+function normalizeExt(raw: string): string {
+  return String(raw).toLowerCase().replace(/[^a-z0-9]/g, '') || 'bin';
+}
+
+// objectKey 是否仍落在本地存储目录内（写入与删除共用同一道收口校验）
+export function isInsideLocalDir(objectKey: string): boolean {
+  const abs = resolve(storageLocalDir, objectKey);
+  const root = storageLocalDir.endsWith(sep) ? storageLocalDir : storageLocalDir + sep;
+  return abs.startsWith(root);
 }
 
 export function publicUrl(objectKey: string): string {
@@ -49,6 +76,24 @@ export async function presignPut(objectKey: string, contentType = 'application/o
   return getSignedUrl(s3!, cmd, { expiresIn: 600 });
 }
 
+// 写入物理对象：本地模式落在 storageLocalDir 内，云端模式直接 PutObject
+//（固定命名资源如品牌 Logo 由服务端落盘，两种驱动都要能写，不能只支持 local）
+export async function writeObject(objectKey: string, body: Buffer, contentType: string): Promise<void> {
+  if (isLocal) {
+    if (!isInsideLocalDir(objectKey)) throw new Error(`非法对象键: ${objectKey}`);
+    const abs = resolve(storageLocalDir, objectKey);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, body);
+    return;
+  }
+  await s3!.send(new PutObjectCommand({
+    Bucket: config.storage.bucket,
+    Key: objectKey,
+    ContentType: contentType,
+    Body: body,
+  }));
+}
+
 export async function deleteObject(objectKey: string): Promise<void> {
   if (isLocal) return; // 本地模式保留文件，按需清理
   await s3!.send(new DeleteObjectCommand({ Bucket: config.storage.bucket, Key: objectKey }));
@@ -58,9 +103,8 @@ export async function deleteObject(objectKey: string): Promise<void> {
 // objectKey 来自数据库，仍做一次目录包含校验，防止历史脏数据造成路径穿越。
 export async function removeObject(objectKey: string): Promise<void> {
   if (isLocal) {
+    if (!isInsideLocalDir(objectKey)) throw new Error(`非法对象键: ${objectKey}`);
     const abs = resolve(storageLocalDir, objectKey);
-    const root = storageLocalDir.endsWith(sep) ? storageLocalDir : storageLocalDir + sep;
-    if (!abs.startsWith(root)) throw new Error(`非法对象键: ${objectKey}`);
     await unlink(abs).catch((e: any) => {
       if (e?.code !== 'ENOENT') throw e;
     });

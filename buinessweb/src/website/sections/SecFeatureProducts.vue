@@ -30,12 +30,12 @@ onMounted(async () => {
       <div v-if="loading" class="sec-loading">加载中…</div>
       <div v-else-if="items.length === 0" class="sec-empty">暂无产品，敬请期待。</div>
       <div v-else class="product-grid">
-        <article v-for="it in items" :key="it.id" class="product" @click="router.push(`/products/${it.slug}`)">
+        <article v-for="it in items" :key="it.id" class="product" @click="router.push(`/product/${it.slug}`)">
           <div class="product-img">
-            <img :src="it.cover_image || '/website/img/prod/cube-closeup.png'" :alt="it.name" />
+            <img v-if="it.cover_image" :src="it.cover_image" :alt="it.name" loading="lazy" />
           </div>
           <div class="product-body">
-            <span class="product-cat">{{ it.category || '存储产品' }}</span>
+            <span v-if="it.category" class="product-cat">{{ it.category }}</span>
             <h4>{{ it.name }}</h4>
             <p>{{ it.summary || 'Centremix 芯联创高品质存储产品。' }}</p>
             <div class="product-tags" v-if="it.price_text"><span>{{ it.price_text }}</span></div>
@@ -53,4 +53,7 @@ onMounted(async () => {
 <style scoped>
 .sec-loading, .sec-empty { padding: 48px 0; text-align: center; color: var(--ink-400); font-size: 14px; }
 .product { cursor: pointer; }
+/* 无封面不拿内置产品图冒充：CSS 空态占位 */
+.product-img:empty { min-height: 180px; background: var(--paper); }
+.product-img:empty::after { content: '暂无图片'; display: flex; align-items: center; justify-content: center; height: 100%; color: var(--ink-400); font-size: 13px; }
 </style>

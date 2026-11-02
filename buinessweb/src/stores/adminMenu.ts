@@ -9,6 +9,7 @@
  *     · 非首组首叶 → path = /admin + 组url；其余叶 → /admin + 组url + 叶url
  *     · 叶子 name = 'admin' + '-' + 组url片段 + '-' + 叶url片段（- 拼接）
  *   - 隐藏页（编辑器/详情页）不进菜单，通过路由 meta.activeMenu 高亮所属菜单项。
+ *   - icon 取自 @element-plus/icons-vue 的组件名（main.ts 已全局注册），侧栏一级菜单使用。
  */
 import type { MenuItem } from '@/types/global';
 
@@ -17,20 +18,20 @@ export const websiteAdminMenu: MenuItem[] = [
     id: 'admin',
     name: '官网管理',
     url: '/admin',
-    icon: 'icon-caiwu',
+    icon: 'Grid',
     children: [
       {
         id: 'admin-pages',
         name: '页面装修',
         url: '/pages',
-        icon: 'icon-caiwu',
+        icon: 'Brush',
         children: [{ id: 'admin-pages-list', name: '页面列表', url: '/list' }],
       },
       {
         id: 'admin-content',
         name: '内容中心',
         url: '/content',
-        icon: 'icon-huoyuan',
+        icon: 'Document',
         children: [
           { id: 'admin-content-products', name: '产品管理', url: '/products' },
           { id: 'admin-content-product-categories', name: '产品分类', url: '/product-categories' },
@@ -42,7 +43,7 @@ export const websiteAdminMenu: MenuItem[] = [
         id: 'admin-config',
         name: '官网配置',
         url: '/config',
-        icon: 'icon-caiwu',
+        icon: 'Setting',
         children: [
           { id: 'admin-config-banners', name: 'Banner 管理', url: '/banners' },
           { id: 'admin-config-menus', name: '导航菜单', url: '/menus' },
@@ -54,21 +55,21 @@ export const websiteAdminMenu: MenuItem[] = [
         id: 'admin-leads',
         name: '转化线索',
         url: '/leads',
-        icon: 'icon-huoyuan',
+        icon: 'TrendCharts',
         children: [{ id: 'admin-leads-list', name: '线索管理', url: '/list' }],
       },
       {
         id: 'admin-media',
         name: '素材中心',
         url: '/media',
-        icon: 'icon-caiwu',
+        icon: 'Picture',
         children: [{ id: 'admin-media-list', name: '素材库', url: '/list' }],
       },
       {
         id: 'admin-system',
         name: '系统管理',
         url: '/system',
-        icon: 'icon-huoyuan',
+        icon: 'SetUp',
         children: [
           { id: 'admin-system-users', name: '用户管理', url: '/users' },
           { id: 'admin-system-audit', name: '审计日志', url: '/audit' },

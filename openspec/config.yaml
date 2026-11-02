@@ -1,0 +1,43 @@
+schema: spec-driven
+
+# 项目上下文（供 AI 生成 artifact 时参考）
+context: |
+  产品：Centremix 芯联创官网 + 运营后台，单体仓库 z-buiness。
+  - backend/：Fastify v4 + node-postgres(PostgreSQL) + zod + @fastify/{multipart,static,cors,rate-limit}；
+    路由集中在 src/routes/{public,content,auth,users,upload}.ts，公开只读接口带 ETag 协商缓存；
+    迁移脚本 sql/migrations/NNN_name.sql（幂等），基线 schema 在 sql/schema.sql，两者需同步。
+  - buinessweb/：Vue 3 <script setup> + TypeScript + Element Plus + Pinia + vue-router（Vite，dev :5190 代理 /api 与 /uploads）。
+    同一份代码承载两类界面：官网前台 src/views/website + src/layout/WebsiteLayout.vue + src/website/sections/*（装修区块组件）；
+    运营后台 src/views/admin/**。API 客户端 src/api/cms.ts（cms / cmsAdmin 两组）。
+  - 内容模型：pages.slug 的 content_json/draft_json 存 {blocks:[{id,type,visible,props}]}，
+    区块类型注册表 src/website/sectionRegistry.ts（type → component/defaultProps/formSchema），与后端种子 JSON 结构必须两侧同步；
+    导航菜单 menus.location ∈ header|footer|cta。
+  - 存储：STORAGE_DRIVER=local（/uploads 由后端静态服务），无 Redis、无 CDN、后端不托管 SPA。
+  - 权限：RBAC 为权限点字符串数组（content:read/content:write/media:write/lead:*/... 与 * 通配），前端 hasPermission 判定。
+
+  约定：
+  - 注释与面向用户的文案用中文；注释只写「为什么」，不写改动流水账。
+  - 不轻易新增 npm 依赖；能用原生能力（HTML5 DnD、fetch/axios 既有封装）优先原生。已登记的例外：资讯正文富文本编辑器用 Tiptap 3（见 article-content-flow 的 D9）——原生 contenteditable + execCommand 已废弃且粘贴/撤销不可靠，正文是官网门面；产品详细描述用同一批已装 Tiptap 包各写一份私有编辑器（见 product-content-flow 的 D9），互不 import；除此之外不再引入第二个编辑器包。
+  - 页面级视觉微调留在该页组件的 scoped style，不改 src/assets/website.css 与全局 tokens。
+  - 后台图标只用 @element-plus/icons-vue（内网 iconfont 本地不可达）。
+  - 破坏性数据变更必须走幂等迁移脚本并提供反向 SQL；接口保持向后兼容优先。
+  - 内容类功能按 src/views 下的功能目录组织（官网产品/资讯各自的列表与详情、后台各自的列表与编辑页同归一个目录）；产品与资讯两条链不互相引用，跨目录只共用接口客户端、类型定义与装修区块渲染器，不共用业务组件（详情地址各自独立：`/product/:slug`、`/article/:slug`，不设共享的形态前缀）。
+  - 一条内容同一时刻只存在于一张表：`articles`/`products` 只放已上线行且**只读**，编辑与删除只作用于未上线表（`article_drafts`/`product_drafts`）；发布与下架都是同一事务内的整行搬运（`INSERT … SELECT` + `DELETE`），内容身份 `uid` 随行搬运、审计按 `uid` 串联。未上线侧的编辑入口与线上侧的读接口互不相见，官网与公开接口只读线上表，永不下发未上线内容。线上表唯一可写的非内容列是排序值（产品侧 `POST /products/:id/sort` 只写 `sort`；资讯侧尚无此需求，排序随内容一起改）。
+  - 校验命令：backend 用 `npx tsc --noEmit`，buinessweb 用 `npx vue-tsc --noEmit -p tsconfig.vitest.json --composite false`。
+
+  领域术语：装修=低代码区块编辑；发布=未上线整行搬进线上表（上架）；下架=线上整行搬回未上线表；导航位=header/cta/footer；线索=表单转化记录。
+
+rules:
+  proposal:
+    - 用中文撰写；破坏性变更在 What Changes 中以 **BREAKING** 标注
+    - Impact 点名受影响的具体文件与迁移脚本，不写泛泛的「前端/后端」
+  specs:
+    - Requirement 用 SHALL/MUST 表述可观察行为，不出现类名、函数名与实现步骤
+    - 每个 Requirement 至少一个 Scenario，且覆盖失败与权限被拒路径
+    - 涉及数据写入的需求写明并发或幂等要求
+  design:
+    - 每个 Decision 给出被否决的替代方案及理由
+    - 涉及内容可见性时区分「未发布 / 空内容 / 接口异常」三种表现
+  tasks:
+    - 每组末尾补验证项（含类型检查命令与 spec 场景走查）
+    - 数据变更任务成对出现：迁移脚本 + 反向回滚脚本

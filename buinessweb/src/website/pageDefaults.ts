@@ -88,7 +88,7 @@ export const DEFAULT_BLOCKS: Record<string, Block[]> = {
       btnText: '进入产品中心 →', btnLink: '/products',
     } },
     { id: 'home-news', type: 'latest-news', visible: true, props: {
-      eyebrow: '新闻咨询 · NEWS',
+      eyebrow: '新闻资讯 · NEWS',
       title: ['最新动态', '品牌洞察'],
       desc: '聚焦 Centremix 芯联创的新品发布、产品科普与行业趋势。',
       theme: 'paper', limit: 3,
@@ -192,7 +192,7 @@ export const DEFAULT_BLOCKS: Record<string, Block[]> = {
   ],
   news: [
     { id: 'news-hero', type: 'page-hero', visible: true, props: {
-      crumb: [{ text: '首页', link: '/' }, { text: '新闻咨询' }],
+      crumb: [{ text: '首页', link: '/' }, { text: '新闻资讯' }],
       title: ['品牌动态 · 产品洞察 · 存储趋势'],
       subtitle: '聚焦 Centremix 芯联创的新品发布、产品科普与行业趋势，帮你做出更从容的存储与升级决策。',
     } },
@@ -271,7 +271,7 @@ export const DEFAULT_BLOCKS: Record<string, Block[]> = {
     { id: 'contact-cta', type: 'cta-banner', visible: true, props: {
       title: '关注品牌动态',
       desc: '留下您的联系方式，第一时间获取 Centremix 芯联创的新品资讯与技术动态。',
-      btnText: '查看新闻咨询 →', btnLink: '/news',
+      btnText: '查看新闻资讯 →', btnLink: '/news',
     } },
   ],
 };

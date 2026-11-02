@@ -37,7 +37,6 @@ interface Props {
   menuList: MenuItem[];
   firstRouteUrl: string;
   isCollapse: boolean;
-  collapseUrl: string;
 }
 
 interface RouteConfig {
@@ -47,8 +46,7 @@ interface RouteConfig {
 const popoverMenuRef = ref<{ hide: () => void }[]>([]);
 const props = withDefaults(defineProps<Props>(), {
   firstRouteUrl: '',
-  isCollapse: false,
-  collapseUrl: ''
+  isCollapse: false
 });
 const emit = defineEmits<{
   (e: 'handle-collapse', collapsed: boolean): void;
@@ -523,11 +521,7 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
             class="menu-sub"
           >
             <template v-slot:title>
-              <el-icon>
-                <svg class="icon icon-aside" aria-hidden="true">
-                  <use :xlink:href="'#' + menu.icon"></use>
-                </svg>
-              </el-icon>
+              <el-icon><component :is="menu.icon" /></el-icon>
               <span>{{ menu.name }}</span>
             </template>
             <!-- 第二级菜单循环 -->
@@ -683,22 +677,24 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
             class="menu-item"
             @click="handleClick(menu.url)"
           >
-            <el-icon>
-              <svg class="icon icon-aside" aria-hidden="true">
-                <use :xlink:href="'#' + menu.icon"></use>
-              </svg>
-            </el-icon>
+            <el-icon><component :is="menu.icon" /></el-icon>
             <span>{{ menu.name }}</span>
           </el-menu-item>
         </template>
       </el-menu>
     </el-scrollbar>
     <div class="collapse-box">
-      <div @click="handleCollpase" class="expend-box">
-        <svg class="icon icon-collapse-box" aria-hidden="true">
-          <use :xlink:href="'#icon-' + collapseUrl"></use>
-        </svg>
-      </div>
+      <button
+        type="button"
+        class="expend-box"
+        :aria-label="isCollapse ? '展开菜单' : '收起菜单'"
+        :title="isCollapse ? '展开菜单' : '收起菜单'"
+        @click="handleCollpase"
+      >
+        <el-icon class="collapse-icon">
+          <component :is="isCollapse ? 'Expand' : 'Fold'" />
+        </el-icon>
+      </button>
     </div>
   </div>
 </template>
@@ -734,13 +730,21 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
   width: var(--zm-el-aside-width);
   transition: width 0.5s;
   background: transparent;
-  padding: 0 20px;
+  padding: 0 12px;
 }
 
 .app-menu {
   background: none;
   border-right: none;
   height: 100%;
+  /* 一级菜单紧贴左边距，二级菜单用较大的级差缩进拉开层级 */
+  --el-menu-base-level-padding: 8px;
+  --el-menu-level-padding: 48px;
+}
+
+/* 收起后只有一列图标，没有层级可辨，恢复居中 */
+.app-menu.el-menu--collapse {
+  --el-menu-base-level-padding: 20px;
 }
 
 .menu-item {
@@ -794,28 +798,39 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
 .collapse-box {
   position: relative;
   height: 40px;
-  display: flex;
-  align-items: center;
-  /* width: var(--zm-el-aside-width); */
+  flex-shrink: 0;
   box-sizing: border-box;
   transition: width 0.5s;
 }
 
 .expend-box {
-  cursor: pointer;
-  background: #fff;
+  position: absolute;
+  top: 50%;
+  right: 12px;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  right: 30px;
-  position: absolute;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  cursor: pointer;
+  color: var(--el-menu-text-color);
+  background: #fff;
+  border: 1px solid var(--el-border-color);
+  border-radius: 6px;
+  transition:
+    color 0.2s,
+    border-color 0.2s;
 }
 
-.icon-collapse-box {
-  font-size: 18px;
-  color: var(--el-menu-text-color);
+.expend-box:hover {
+  color: var(--el-color-primary);
+  border-color: var(--el-color-primary);
+}
+
+.collapse-icon {
+  font-size: 16px;
 }
 
 .menu-container {

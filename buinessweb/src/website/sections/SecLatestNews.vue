@@ -13,9 +13,8 @@ const loading = ref(true);
 
 onMounted(async () => {
   try {
-    const res: any = await cms.getArticles({ page: 1, pageSize: Number(props.p.limit) || 3 });
-    const payload = res && res.data ? res.data : res;
-    items.value = payload && payload.code === 0 && Array.isArray(payload.data) ? payload.data : [];
+    const res: any = await cms.getArticlesPaged({ page: 1, pageSize: Number(props.p.limit) || 3 });
+    items.value = res && res.code === 0 && Array.isArray(res.data) ? res.data : [];
   } catch {
     items.value = [];
   } finally {
@@ -37,8 +36,8 @@ function fmtDate(s: string): string {
       <div v-if="loading" class="sec-loading">加载中…</div>
       <div v-else-if="items.length === 0" class="sec-empty">暂无资讯，敬请期待。</div>
       <div v-else class="insights-grid">
-        <article v-for="it in items" :key="it.id" class="insight" @click="router.push(`/news/${it.slug}`)">
-          <span class="insight-tag">{{ it.category || 'NEWS' }}</span>
+        <article v-for="it in items" :key="it.id" class="insight" @click="router.push(`/article/${it.slug}`)">
+          <span v-if="it.category" class="insight-tag">{{ it.category }}</span>
           <h4>{{ it.title }}</h4>
           <p>{{ it.summary || '' }}</p>
           <div class="insight-foot">
