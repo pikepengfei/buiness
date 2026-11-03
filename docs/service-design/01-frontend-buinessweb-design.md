@@ -495,15 +495,15 @@ sequenceDiagram
 
 ## 9. 资讯链与资讯两个功能目录
 
-对应 OpenSpec change `article-content-flow`（D9 富文本、D10 双表、D12 级联、D13 线上只读与整行搬运、D14 修改留痕）。本节只回答「谁住在哪个目录、谁能写、一条内容此刻住在哪张表、搬运搬哪些列、清洗留什么、图片归谁、级联往哪走、改动留痕归谁」；出入参见《接口文档.md》，列定义参见《数据结构文档.md》。
+对应 OpenSpec change `article-content-flow`（D3 标识由服务端在创建时生成且一经生成即冻结、D9 富文本、D10 双表、D12 级联、D13 线上只读与整行搬运、D14 修改留痕）。本节只回答「谁住在哪个目录、谁能写、一条内容此刻住在哪张表、搬运搬哪些列、清洗留什么、图片归谁、级联往哪走、改动留痕归谁」；出入参见《接口文档.md》，列定义参见《数据结构文档.md》。
 
 ### 9.1 目录归属
 
 | 位置 | 文件 | 职责 | 写权限 |
 |------|------|------|--------|
 | `src/views/admin/content/article/` | `index.vue` | 管理列表：`articles` 与 `article_drafts` 做 `UNION ALL`，一条条目恰好一行，按钮形态按 `origin` + `state` 渲染 | `content:write` |
-| | `edit.vue` | 编辑页：单 id 寻址（路径参数=发布表行 id，只读；`?draft=`=未发布表行 id）+ 保存 / 发布 / 下线 / 删除 / 修改记录 | `content:write` |
-| | `categories.vue` | 资讯分类维护，跨两表的引用数量只读展示 | `content:write` |
+| | `edit.vue` | 编辑页：单 id 寻址（路径参数=发布表行 id，只读；`?draft=`=未发布表行 id）+ 保存 / 发布 / 下线 / 删除 / 修改记录；原「标识」输入格改为只读展示（服务端创建时生成，`POST` 响应回显，改名不影响地址） | `content:write` |
+| | `categories.vue` | 资讯分类维护，跨两表的引用数量只读展示；弹窗的标识格同样只读（`ac-`+6 位，保存后生成） | `content:write` |
 | | `components/RichBodyEditor.vue` | Tiptap 3 正文编辑器，**本目录私有**，不被任何其它视图 import | — |
 | `src/views/website/news/` | `index.vue` | 官网资讯列表（装修页 + `SecNewsFeed`） | 只读 |
 | | `detail.vue` | 详情页 `/article/:slug` | 只读 |
@@ -518,7 +518,7 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-  [*] --> 草稿: POST /articles/drafts（未发布表一行，state=0）
+  [*] --> 草稿: POST /articles/drafts（未发布表一行，state=0；服务端生成 uid 与标识 a-xxxxxx）
   草稿 --> 已上线: POST /articles/drafts/:id/publish（整行搬进发布表 + 删未发布行）
   已上线 --> 已下线: POST /articles/:id/unpublish（整行搬回未发布表，state=2）
   已下线 --> 已上线: 发布（整行搬回，published_at 与 view_count 延续）
@@ -542,7 +542,7 @@ stateDiagram-v2
 
 | 方向 | 搬运的列 | 说明 |
 |------|----------|------|
-| 发布（未发布 → 发布表） | `slug` `title` `cover_image` `summary` `body` `category_id` `tags` `author` + `uid` `view_count` `published_at` `created_by` `created_at` | 8 个可编辑列一一对应；`body` 在搬运前清洗；`uid` 与累计浏览、首次发布时间随行延续 |
+| 发布（未发布 → 发布表） | `slug` `title` `cover_image` `summary` `body` `category_id` `tags` `author` + `uid` `view_count` `published_at` `created_by` `created_at` | 7 个可编辑列一一对应；`slug` 也在这份清单里但**不是可编辑列**——它在建草稿那一刻由服务端生成，搬运时随行原样带过去；`body` 在搬运前清洗；`uid` 与累计浏览、首次发布时间随行延续 |
 | 发布时新写 | `status=1`、`updated_by`=操作人、`updated_at=NOW()` | `published_at = COALESCE(带下来的值, NOW())`：首次发布写时间，之后再上线不改 |
 | 下线（发布表 → 未发布表） | 整行，含 `uid` `view_count` `published_at` `created_by` `created_at` `updated_at` | 只把 `state` 置 2、`updated_by` 写当次操作人；其余逐列保留，实测正文搬运前后 sha256 一致 |
 | 排除 | 任何「未发布改动」标记 | 副本机制已随 012 撤除，`article_drafts` 没有 `published_id` 列 |
@@ -605,15 +605,15 @@ stateDiagram-v2
 
 ## 10. 产品链与产品两个功能目录
 
-对应 OpenSpec change `product-content-flow`（D1 详情独立路由、D2 目录布局、D3 双表、D4 三态命名、D5 标识可变、D6 线上只读与排序例外、D7 身份与留痕、D8 迁移 010、D9 描述编辑器私有、D10 公开接口缓存、D11 分类引用数、D12 线索按身份追溯、D13 页面态与列表态分层）。与 §9 的分工：那一节讲资讯链自己的形态，本节只讲产品链，两链同构但**表、常量、编辑器各自独立**，跨目录零 import。
+对应 OpenSpec change `product-content-flow`（D1 详情独立路由、D2 目录布局、D3 双表、D4 三态命名、D5 标识由服务端在创建时生成且一经生成即冻结、D6 线上只读与排序例外、D7 身份与留痕、D8 迁移 010、D9 描述编辑器私有、D10 公开接口缓存、D11 分类引用数、D12 线索按身份追溯、D13 页面态与列表态分层）。与 §9 的分工：那一节讲资讯链自己的形态，本节只讲产品链，两链同构但**表、常量、编辑器各自独立**，跨目录零 import。
 
 ### 10.1 目录归属
 
 | 位置 | 文件 | 职责 | 写权限 |
 |------|------|------|--------|
 | `src/views/admin/content/product/` | `index.vue` | 列表：`products` 与 `product_drafts` 做 `UNION ALL`，一条产品恰好一行；按钮形态按 `origin` + `state` 渲染 | `content:write` |
-| | `edit.vue` | 新建 / 编辑 / 查看三合一（路径参数=线上行 id 只读，`?draft=`=未上架行 id）+ 保存 / 保存并发布 / 去下架 / 删除 / 修改记录 | `content:write` |
-| | `categories.vue` | 产品分类维护，跨两表引用数量只读展示 | `content:write` |
+| | `edit.vue` | 新建 / 编辑 / 查看三合一（路径参数=线上行 id 只读，`?draft=`=未上架行 id）+ 保存 / 保存并发布 / 去下架 / 删除 / 修改记录；原「产品标识」输入格改为只读展示（服务端创建时生成，`POST` 响应回显，改名不影响地址） | `content:write` |
+| | `categories.vue` | 产品分类维护，跨两表引用数量只读展示；弹窗的标识格同样只读（`pc-`+6 位，保存后生成） | `content:write` |
 | | `components/DescriptionEditor.vue` | 详细描述富文本（Tiptap 3，**本目录私有**） | — |
 | | `components/GalleryEditor.vue` | 图集（≤8，条目是可直接渲染的图片地址，不是 `object_key`） | — |
 | | `components/SpecsEditor.vue` | 规格参数（≤20 的 `{label,value}` 有序数组，行序即展示序） | — |
@@ -635,8 +635,9 @@ sequenceDiagram
   participant P as products（线上）
   participant W as 官网 /product/:slug
 
-  O->>A: POST /products/drafts（带完整形态：specs≤20 / gallery≤8 / highlights≤8）
-  A->>D: INSERT 一行 state=0，服务端生成 uid
+  O->>A: POST /products/drafts（带完整形态：specs≤20 / gallery≤8 / highlights≤8；不带标识）
+  A->>D: INSERT 一行 state=0，服务端生成 uid 与标识 p-xxxxxx（跨两表判占用），响应回传 slug
+  A-->>O: 编辑页只读位立即回显标识与官网地址
   O->>A: PATCH /products/drafts/:id（必带 uid）
   A->>D: UPDATE 未上架行 + 刷 updated_by（官网毫无变化）
   O->>A: POST /products/drafts/:id/publish（带 uid）
@@ -647,7 +648,7 @@ sequenceDiagram
   A->>D: 同事务整行搬回，state=2，uid / sort / published_at 随行保留
   A->>P: 同事务 DELETE 线上行
   W-->>O: 地址立即失效（品牌化 404）
-  O->>A: PATCH /products/drafts/:id（改标识也在这里）
+  O->>A: PATCH /products/drafts/:id（改名称与内容；标识不在可写列，改了也不生效）
   O->>A: POST /products/drafts/:id/publish → 再上架，上架时间与排序值延续
   Note over O,P: 期间唯一的线上写动作——POST /products/:id/sort 只改 sort
 ```
@@ -664,7 +665,7 @@ sequenceDiagram
 
 | 方向 | 列 | 说明 |
 |------|----|------|
-| 上架（未上架 → `products`） | `slug` `name` `category_id` `series` `cover_image` `gallery` `summary` `description` `specs` `highlights` `price_text` `buy_link` `sort` | 13 个可编辑列一一对应；`uid`、`created_by`、`created_at`、`published_at` 由搬运语句显式带过去，MUST NOT 交给列默认值重新生成 |
+| 上架（未上架 → `products`） | `slug` `name` `category_id` `series` `cover_image` `gallery` `summary` `description` `specs` `highlights` `price_text` `buy_link` `sort` | 12 个可编辑列一一对应；`slug` 也在清单里但**不是可编辑列**——建草稿时由服务端生成，上架时随行原样带过去。`uid`、`created_by`、`created_at`、`published_at` 由搬运语句显式带过去，MUST NOT 交给列默认值重新生成 |
 | 上架时新写 | `status=1`、`updated_by`=操作人、`updated_at=NOW()` | `published_at = COALESCE(带下来的, NOW())`：首次上架写时间，再上架不覆盖 |
 | 下架（`products` → 未上架） | 整行 | 只把 `state` 置 2、`updated_by` 写当次操作人；`sort` 与 `published_at` 随行保留，不因换表重置 |
 

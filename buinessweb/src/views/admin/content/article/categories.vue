@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 资讯分类管理：表格 + 新增/编辑弹窗 + 删除
- * 字段对齐后端 /article-categories（name/slug/description/sort）
+ * 字段对齐后端 /article-categories（name/description/sort）；
+ * 标识（slug）由服务端在创建时生成、此后冻结，弹窗里那一格只读展示
  * 引用数量由服务端跨两张资讯表统计（线上行 + 待发布副本 + 纯草稿），前端不再自己数
  */
 import { computed, onMounted, ref } from 'vue';
@@ -31,20 +32,24 @@ onMounted(load);
 const dlg = ref(false);
 const saving = ref(false);
 const editId = ref<number | null>(null);
+// 只读展示用的现有标识：新增时库里还没有这一行，所以拿到的是占位文案
+const existingSlug = ref('');
 const form = ref<any>({});
 function openCreate() {
   editId.value = null;
-  form.value = { name: '', slug: '', description: '', sort: 0 };
+  existingSlug.value = '';
+  form.value = { name: '', description: '', sort: 0 };
   dlg.value = true;
 }
 function openEdit(row: Row) {
   editId.value = row.id;
-  form.value = { name: row.name, slug: row.slug, description: row.description || '', sort: row.sort ?? 0 };
+  existingSlug.value = row.slug;
+  form.value = { name: row.name, description: row.description || '', sort: row.sort ?? 0 };
   dlg.value = true;
 }
 async function submit() {
-  if (!form.value.name.trim() || !form.value.slug.trim()) {
-    ElMessage.warning('请填写名称与标识');
+  if (!form.value.name.trim()) {
+    ElMessage.warning('请填写名称');
     return;
   }
   saving.value = true;
@@ -55,7 +60,8 @@ async function submit() {
     dlg.value = false;
     load();
   } catch (e: any) {
-    ElMessage.error(e?.message || '保存失败');
+    // 服务端的原因原样显示：名称/长度不合规与标识并发兜底都在这一条出口里
+    ElMessage.error(e?.response?.data?.message || e?.message || '保存失败');
   } finally {
     saving.value = false;
   }
@@ -131,7 +137,8 @@ async function move(index: number, dir: -1 | 1) {
           <el-input v-model="form.name" placeholder="如：品牌动态" />
         </el-form-item>
         <el-form-item label="标识">
-          <el-input v-model="form.slug" placeholder="URL 片段，如：brand" />
+          <!-- 只读展示位，位置与原来的输入框一致：新增时库里还没有这一行 -->
+          <span class="cat-slug">{{ editId == null ? '保存后自动生成' : existingSlug }}</span>
         </el-form-item>
         <el-form-item label="描述">
           <el-input v-model="form.description" type="textarea" :rows="3" />
@@ -156,5 +163,9 @@ async function move(index: number, dir: -1 | 1) {
 }
 .hd-t {
   font-weight: 600;
+}
+.cat-slug {
+  font-size: 13px;
+  color: #606266;
 }
 </style>

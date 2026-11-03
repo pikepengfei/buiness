@@ -32,7 +32,7 @@
 - 打通产品「录入 → 保存 → 发布上架 → 官网列表 → 官网详情 → 下架 → 编辑 → 再上架」，一条产品同一时刻只存在于一张表，**正在上架的那一行不可编辑、不可删除，唯一动作是下架（外加只改排序值的专用动作）**
 - 线上内容永不被半成品覆盖：编辑半成品不可能出现在官网，因为要改必须先让它离开官网
 - 每条产品带一个跨表稳定的身份（`uid`）与「最近由谁改动」的记录（`updated_by`），谁在何时改了哪些字段可从审计日志按同一条产品串起来看
-- 修掉四处真实契约缺陷：标识静默丢弃、规格形态漂移、详情分类名缺失、上下架动作缺失
+- 修掉四处真实契约缺陷：标识静默丢弃（收敛为服务端生成且冻结，见 D5）、规格形态漂移、详情分类名缺失、上下架动作缺失
 - 让「状态即时生效」在响应缓存层面成立，而不只是接口层
 - 详细描述按清洗后的富文本保存，做到「编辑器产出 = 清洗后保留 = 官网渲染」
 - 引用关系跨两表统计：分类删除保护把草稿与已下架一并算进去；询价线索在下架与再发布后仍能追溯到同一条产品
@@ -121,13 +121,15 @@
 
 被否决的替代方案：沿用资讯链的「已上线 / 已下线」文案（与产品域习惯相反，且要把现有界面文案整体重写）；把三态压成两态（丢掉草稿能力，运营录产品必须在上架前借别处暂存）；用 `status=0` 表达草稿（D3 已否决）。
 
-### D5 标识可变，唯一性跨两表校验
+### D5 标识由服务端在创建时生成，一经生成即冻结
 
-改标识只能落在未上线表的行上（`PATCH /products/drafts/:draftId` 的映射含 `slug`）。**已上架产品的标识不可原地改**——那与「线上只读」直接冲突。风险窗口与资讯链同形地下移：改标识本身不惊动官网（下架期间本就 404），真正让旧地址失效的是「下架」这一步，所以**下架确认里必须写清旧地址将失效**；保存改了标识的未上线产品时就地提示该条目的待生效地址。表单同时显示当前可用地址与待生效地址：在线行读 `products.slug`，草稿/已下架行读 `product_drafts.slug`。
+标识不再是运营的输入项：`POST /products` 在落库前生成 `p-{6 位 [a-z0-9]}` 短码写入 `slug`，并随创建响应（`{id, uid, slug, stripped_images}`）下发给管理端只读回显；`PATCH /products/drafts/:draftId` 的映射表**移除 `slug`**，前端也不提交。此前「PATCH 映射不含 slug 但创建与草稿编辑可写 slug」是同一份契约里两处相反的说法，运营打错一个字符就得删了重建，且改标识即改官网地址、让已发布的地址与外部物料失效——冻结从根上消掉这个风险窗口。已上架标识本来就不许原地改（与「线上只读」冲突），现在把同一条约束扩到所有状态，界面也不再需要「待生效地址」与改标识后果确认。
 
-唯一性由跨两表预检承担（照抄 `assertArticleSlugFree` [content.ts:369-386](../../../backend/src/routes/content.ts) 的写法，表名与文案换成产品域）：`SELECT 'online' FROM products WHERE slug=$1 UNION ALL SELECT 'draft' FROM product_drafts WHERE slug=$1 AND id IS DISTINCT FROM $2`，区分「撞线上」与「撞别的草稿」给不同中文提示；两张表各留 `UNIQUE (slug)` 兜并发，23505 转 409 而不是 500。格式规则（小写字母、数字与连字符、长度上限）在 zod 层就拒，不落库——**资讯链的 spec 写着「格式要求与产品一致」但它的 schema 没有实现格式校验**（[content.ts:337](../../../backend/src/routes/content.ts) 只有 min/max），本链按自己的 spec 补齐，并把这个不对称记进「对既有 change 的修订」而不擅自替资讯链改行为。分类标识同理。
+唯一性由**生成时的占用判定**承担，不再需要跨表预检函数：`isContentSlugTaken(products, product_drafts, slug)` 走 `SELECT … UNION ALL`，两张表都查过才用；重试上限内每次都撞车就放手让 INSERT 去碰 `UNIQUE (slug)`，全局 23505 → 409（`app.ts` 兜底），MUST NOT 静默换一个近似值——一次创建给出两个不同标识比创建失败更难解释。搬运（发布/下架）仍在事务内做同标识冲突判定（`slug_online` / `slug_draft` 两条 kind），因为存量手工填写的标识可能本来就互相冲突，那是搬不动的历史事实，不能因为改了生成方式就假装不存在。
 
-替代方案与否决理由：编辑态禁用标识（打错一个字符就得删了重建）；为旧标识自动跳转（与 C1「不做自动跳转」冲突，后端不托管 SPA 也给不出真 301）；只在发布时校验唯一（把可预期的输入校验推迟成一次事务失败）。
+格式规则由生成器自身保证（小写字母、数字与连字符、长度上限），不再需要 zod 层的 `SLUG_RE`——外部提交的 slug 被 schema 删除后由 zod 默认剥离，写不进库。分类标识同形处理（`pc-` 前缀，占用判定只查 `product_categories` 一张表）。
+
+替代方案与否决理由：**拼音/中文转写生成**（多音字与生僻字不可靠，中文名转出一长串既不可读也更容易撞车，且项目约定不为此新增 npm 依赖）；**保留输入框只加默认值**（运营仍可改成任意字符串，格式与唯一性校验、后果确认弹窗一概删不掉）；**外部提交 slug 返回 400**（为一个本该不存在的字段开出校验与测试路径，老客户端整笔请求失败，比静默丢弃更难排障）；**为旧标识自动跳转**（与 C1「不做自动跳转」冲突，后端不托管 SPA 也给不出真 301）；**迁移存量标识成统一短码**（等于批量改官网地址，需求方已确认不动存量）。
 
 ### D6 线上行的唯一可写列是 `sort`，走独立端点而非通用编辑
 
@@ -216,7 +218,7 @@
 
 - **`openspec/config.yaml`** 的「保存与发布是两个动作：已发布内容的编辑先落成未发布改动」这条约定已被资讯链 012 与本轮产品双表共同推翻，改写为「一条内容同一时刻只存在于一张表；已上线内容只读，编辑与删除只作用于未上线表；发布与下架都是事务内整行搬运」。**不改这条约定，两条链的实现都会与项目级约定相抵触。**
 - **`article-content-flow`** 的两处陈述随本轮失效，需同步订正（不改其行为，只改措辞）：`design.md` 依赖关系段写「产品链不做草稿分离，本 change 的双表只动资讯」、D12/修订清单写「产品侧仍不做草稿分离（该链的 Non-Goals 不变）」——两句都改为「产品链已按同构双表落地，两链各自持有表与常量」；它对 `010_product_flow.sql` 的描述（「specs 默认值 + 种子」）范围已扩大为「双表 + 形态归一 + uid/updated_by/published_at + inquiries.product_uid + 四形态种子」。
-- **资讯链的一个规格与实现的不对称，本轮只记录不代改**：其 spec 写「标识格式要求与产品一致」，而 `draftCreateSchema.slug` 只有 min/max、无格式校验（[content.ts:337](../../../backend/src/routes/content.ts)）。本链按自己的 spec 实现格式校验；资讯侧补齐留给资讯链。
+- **标识生成方式落定后残留的一条不对称（本轮不处理，登记在此）**：内容域四张表（产品/资讯及其未上线表、两类分类）的标识都由服务端生成并冻结，但装修页 `pages.slug` 仍是运营手填、schema 只有 `min(1).max(80)` 且无格式校验（[content.ts:229](../../../backend/src/routes/content.ts) 的 `pageSchema.slug`，配合 [content.ts:207-211](../../../backend/src/routes/content.ts) 的 `assertSlugFree('pages', …)`）。它决定的是装修页地址而不是内容地址，归 C2/装修链 own，本轮不动。原先「资讯链 spec 写格式要求与产品一致而实现只有 min/max」这条不对称随两链都改成服务端生成而消失。
 - **C1 `site-runtime-link-integrity`**：`/product/:slug` 的地址断言与 `/products/:slug` 的移除仍归它的第 3/4 组（0/64 未实现）。本链按 D1 的过渡形态新增 `/product/:slug` 记录，两条并存，不代替 C1 删除旧记录。
 - **C2 `page-publication-approval`**：只管 `pages` 表，本链不动它；`/product/:slug` 的取数仍读 `products` 正式列。
 - **`decoration-editor-toolkit`**：`SecProductGrid` / `SecFeatureProducts` 的跳转地址改写归本链第 6 组（与 C1 第 4 组同批改写），装修区块的属性表单不接富文本。
@@ -229,7 +231,8 @@
 - [搬运清单漏列，某字段搬过去丢了；或把 `uid` 交给列默认值，历史断线] → 发布与下架都用显式列对列的 `INSERT … SELECT`，`uid`/`sort`/`published_at`/`created_*`/`updated_by` 逐一写出；清单同时写进迁移注释与 spec 场景，正向断言「改了必上线」，反向断言「下架再上架后上架时间、排序与修改历史都延续」。
 - [搬运不是原子的：插了草稿行却删发布行失败，一线上出现两条同内容] → 两个动作各包在单事务里，两表 `UNIQUE (uid)` 让「同一条内容两表都有行」最多停留到事务结束即被约束回滚；不写「先删后插」的中间态。
 - [双 id 混淆：界面把线上行 id 传给编辑或删除，动作落到不该动的条目] → 一行只有一个 id 与一个 `origin`，按钮形态**只由 `origin` 与 `state` 渲染**；写请求 MUST 带 `uid`，服务端校验相符，不符即拒绝。走查覆盖「数字相同但来自另一张表的 id 互不命中」。
-- [`products` 与 `product_drafts` 的 `UNIQUE (slug)` 与跨表预检并存，草稿撞线上会在保存时被挡，但「下架时草稿侧已有同标识行」是另一条路径] → 下架事务内先查 `product_drafts` 同 `slug`，冲突返回 409 给可读原因，不静默改名（照抄资讯侧 [content.ts:649-651](../../../backend/src/routes/content.ts)）。
+- [`products` 与 `product_drafts` 的 `UNIQUE (slug)`：新建靠生成时的占用判定，但「下架时草稿侧已有同标识行」是另一条路径] → 存量手工填写的标识仍可能互相冲突，搬运事务内保留同标识判定：下架先查 `product_drafts` 同 `slug`、发布先查 `products` 同 `slug`，冲突返回 409 给可读原因，不静默改名（照抄资讯侧 [content.ts:649-651](../../../backend/src/routes/content.ts)）。新建路径不再需要跨表预检，因为标识是生成出来的。
+- [分类标识换成不透明短码后，官网分类筛选地址（`?category=…`）从可读词变成 `pc-xxxxxx`] → 服务端按非数字分支解析（[public.ts:11-13](../../../backend/src/routes/public.ts) 的 `categoryCond`），功能不变；已分享出去的老筛选地址落到空态而不是报错，走查覆盖「按新标识筛选命中、对不上的标识返回空列表」。存量分类标识不迁移，老地址在存量分类上继续有效。
 - [`audit_logs.entity_id` 的语义在产品上从「行 id」变成「uid」，同一张表里混着两种口径的历史行] → 只影响 `entity_type='product'`，按该类型过滤即自洽；010 之前记行 id 的历史行不回填、不与 uid 混查，时间线顶部注明「修改记录自本次修订起」。
 - [管理列表要并两表两状态，排序与分页容易写出重复行或漏行] → 取数集中在一个查询函数：两表 `UNION ALL` 后统一 `ORDER BY (updated_at, origin, id)` 全序再分页，两表 `id` 空间不重叠但带上表名作来源标记；验收含「分页重复/遗漏」与「三态筛选各只出自己那批」。
 - [`inquiries` 加列与回填是破坏性 DDL] → `ADD COLUMN ... NULL` 无默认值不重写表；本地 0 行，回填语句按 `WHERE product_uid IS NULL AND product_id IS NOT NULL` 幂等；反向脚本 `DROP COLUMN`。
@@ -245,7 +248,7 @@
 **执行顺序有硬依赖**：数据迁移必须先落地，按草稿 id 读写的端点与只查发布表的公开接口才跑得起来；后端契约必须与前端调用同批发布，因为管理端点签名是破坏性改动。
 
 1. 数据：执行 `010_product_flow.sql`（建 `product_drafts`、`specs` 归一与超限统计、products 加 `uid`/`updated_by`/`published_at`、回收 `status=0` 行并收窄 `CHECK (status = 1)`、`inquiries.product_uid` 回填、2 分类 + 4 产品四形态种子），同步 `backend/sql/schema.sql` 基线；核对发布表只剩 `status=1`、两表 `uid` 各自不重复、`state` 只有 0/2、被回收行的 `published_at` 与 `sort` 随行到达未上线表
-2. 后端未上线侧契约：`POST/PATCH/DELETE /products/drafts`、`POST /products/drafts/:draftId/publish`、slug 格式校验与跨两表唯一预检、`specs`/`highlights`/`gallery` 形态收紧、描述清洗与站外图片剥除数量回传（`backend/src/routes/content.ts` 产品段）
+2. 后端未上线侧契约：`POST/PATCH/DELETE /products/drafts`、`POST /products/drafts/:draftId/publish`、标识由服务端生成（`p-` 短码 + 跨两表占用判定）且写入路径不含 slug、`specs`/`highlights`/`gallery` 形态收紧、描述清洗与站外图片剥除数量回传（`backend/src/routes/content.ts` 产品段）
 3. 后端线上侧契约：`POST /products/:id/unpublish`（整行搬运）、`POST /products/:id/sort`（只写排序）、`DELETE /products/:id` 保留并标注不对外使用、移除 `POST /products` 与 `PATCH /products/:id`；`GET /products` 换两表并集并回传 `uid`/`origin`/`state`/`state_text`/`updated_by`；写请求统一带 `uid` 做身份校验；`PRODUCT_STATE_TEXT` 常量；每条写路径刷新 `updated_by` 并把 `diff` 写进 `audit_logs`（`entity_type='product'`、`entity_id=uid`）；分类 `ref_count` 与删除保护跨两表
 4. 后端下发契约：`/public/products/:slug` 与相关推荐补分类名称、产品公开接口改协商缓存、`/public/search` 产品分支补分类名 join（`backend/src/routes/public.ts`）；询价落 `product_uid`、线索列表按 uid 解析产品（`backend/src/routes/forms.ts`）
 5. 前端类型与客户端：`types/cms.ts` 的 `ProductAdminRow`/`ProductEditable`/`ProductDraftPayload`、`api/cms.ts` 的 `cmsAdmin.products` 按双表签名重写、补 `setOnlineSort` 与按 uid 取审计

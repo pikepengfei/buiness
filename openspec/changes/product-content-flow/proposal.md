@@ -22,13 +22,13 @@
 
 ## What Changes
 
-- 新增能力 **`product-content-flow`**：产品从管理端录入到官网产品中心列表与详情展示的完整行为契约——字段完整性、标识可变且跨表唯一、双表放置与线上只读、三态命名一致、形态（图集/规格/卖点）统一、描述富文本清洗后保存、状态即时影响官网、详情所需关联信息一并发下、分类删除跨表保护、下架不切断线索追溯
+- 新增能力 **`product-content-flow`**：产品从管理端录入到官网产品中心列表与详情展示的完整行为契约——字段完整性、标识由服务端生成且一经生成即冻结、双表放置与线上只读、三态命名一致、形态（图集/规格/卖点）统一、描述富文本清洗后保存、状态即时影响官网、详情所需关联信息一并发下、分类删除跨表保护、下架不切断线索追溯
 - 新增能力 **`content-view-structure`（产品侧归属要求）**：产品功能在 `views` 下落成管理端与官网两个独立目录，目录自足（含图集/规格/描述三个私有编辑器），产品实现不引用资讯实现
 - **BREAKING** 产品改成双表模型：新增 `product_drafts`（草稿 + 已下架，可编辑可删除），`products` 收窄为「只放正在上架的行」（`status` 恒为 1，`CHECK (status = 1)`）。一条产品同一时刻只存在于一张表，没有副本列、没有「是否存在未发布改动」
 - **BREAKING** 已上架产品**不可编辑、不可删除**：`POST /products` 与 `PATCH /products/:id` 移除，改为 `POST/PATCH/DELETE /products/drafts…` + `POST /products/drafts/:draftId/publish` + `POST /products/:id/unpublish`；`DELETE /products/:id` 保留在代码里但界面与文档都不对外使用
 - **BREAKING** 每个写请求必须携带 `uid`，服务端校验「路径里的行 id 与提交的 uid 指向同一行」，不符即拒绝；审计按 `entity_type='product'` + `entity_id=uid` 记录并首次启用 `diff`
 - **BREAKING** 产品的 `specs` 形态定为 `{label,value}` 有序数组（≤20），`gallery` ≤8、`highlights` ≤8；服务端读写校验，存量 `{}` 由迁移归一为 `[]`，超上限的行只统计报告、不自动截断
-- **BREAKING** 编辑态允许修改标识（slug），服务端做格式校验与跨两表唯一性预检；官网详情地址随标识变化，旧标识立即不可访问（风险窗口在下架那一步，下架确认必须写清）
+- **BREAKING** 标识（slug）不再是运营填写的字段：改由服务端在创建落库时生成 `p-{6 位}` 短码（字符集 `[a-z0-9]`，生成时按线上表 + 未上线表做占用判定），随创建响应下发给管理端只读回显；所有写入路径都不接收标识，一经生成即冻结，改名不再影响官网地址。存量手工填写的标识不迁移、不重排，老地址继续可用（详见 design D5）
 - **BREAKING** 产品详情独立成一条路由 `/product/:slug`，与资讯详情彻底分轴；本链先按「新旧两条并存、指向同一组件」的过渡形态挂出，`/products/:slug` 的移除归 `site-runtime-link-integrity` 第 3 组
 - 三态中文称谓定为 **草稿 / 已上架 / 已下架**，由服务端常量 `PRODUCT_STATE_TEXT` 单一来源产出 `state_text`；移除编辑页的状态 `el-switch` 与列表的乐观 `PATCH {status}`
 - 新增**只写排序值**的线上专用动作 `POST /products/:id/sort`（请求体 `{uid, sort}`，只更新 `sort` 与 `updated_by`，内容列与上架时间不动，审计记 `action='sort'`）——否则运营调一次产品中心顺序就要把产品逐个撤下官网
@@ -61,7 +61,7 @@
 
 **后端**
 
-- `backend/src/routes/content.ts` 产品段（落地后位于 [699-1224](../../../backend/src/routes/content.ts)，改造前是 653-737）按资讯段（[279-697](../../../backend/src/routes/content.ts)）同构重写：`PRODUCT_STATE_TEXT`（[:97](../../../backend/src/routes/content.ts)）、`PRODUCT_ONLINE_WRITABLE_COLUMNS`（只含 `sort`，[:779](../../../backend/src/routes/content.ts)）、`PRODUCT_PUBLISH_COLUMNS` 搬运清单（[:774](../../../backend/src/routes/content.ts)）、`assertProductSlugFree` 跨两表预检 + 标识格式校验、`assertProductDraftIdentity` / `assertProductOnlineIdentity` 同形实现、草稿 CRUD 与发布/下架/排序三端点、描述清洗与站外图片数量回传、`GET /products` 两表 `UNION ALL` 并集（[:1137](../../../backend/src/routes/content.ts)）、`GET /products/:id` 与 `GET /products/drafts/:draftId` 各读一张表、每条写路径刷新 `updated_by` 并写 `audit_logs.diff`（`fields` 只收录**值真的变了**的列，见 design D7.5）、分类 `ref_count` 跨两表与删除 409
+- `backend/src/routes/content.ts` 产品段（落地后位于 [699-1224](../../../backend/src/routes/content.ts)，改造前是 653-737）按资讯段（[279-697](../../../backend/src/routes/content.ts)）同构重写：`PRODUCT_STATE_TEXT`（[:97](../../../backend/src/routes/content.ts)）、`PRODUCT_ONLINE_WRITABLE_COLUMNS`（只含 `sort`，[:779](../../../backend/src/routes/content.ts)）、`PRODUCT_PUBLISH_COLUMNS` 搬运清单（[:774](../../../backend/src/routes/content.ts)）、标识生成 `genSlug` / `isSlugTaken` / `isContentSlugTaken`（[content.ts:138-173](../../../backend/src/routes/content.ts)，四张内容表与两张分类表共用）、`assertProductDraftIdentity` / `assertProductOnlineIdentity` 同形实现、草稿 CRUD 与发布/下架/排序三端点、描述清洗与站外图片数量回传、`GET /products` 两表 `UNION ALL` 并集（[:1137](../../../backend/src/routes/content.ts)）、`GET /products/:id` 与 `GET /products/drafts/:draftId` 各读一张表、每条写路径刷新 `updated_by` 并写 `audit_logs.diff`（`fields` 只收录**值真的变了**的列，见 design D7.5）、分类 `ref_count` 跨两表与删除 409
 - `backend/src/routes/public.ts`：`/public/products/:slug` 与相关推荐补分类名称 join（[public.ts:110-129](../../../backend/src/routes/public.ts)）、产品四个只读分支接 `negotiateCache`（[:26-32](../../../backend/src/routes/public.ts)，该钩子让显式设头的分支退出 [:35](../../../backend/src/routes/public.ts) 的 `max-age` 钩子）、`/public/search` 产品分支补分类名（[:233](../../../backend/src/routes/public.ts)）；一律只查 `products`
 - `backend/src/routes/forms.ts`：`POST /forms/inquiry` 在产品写入时同时记 `product_uid`（[:98-120](../../../backend/src/routes/forms.ts) 的提交端点、[:166-167](../../../backend/src/routes/forms.ts) 的派生查询，入参 `productId` 不变 [:15](../../../backend/src/routes/forms.ts)）；线索列表 `GET /leads/inquiry` 按 uid 跨两表解析产品，派生 `product:{name,slug,origin,state_text}`（`attachLeadProduct` [:63-85](../../../backend/src/routes/forms.ts)）
 - `backend/src/lib.ts`：清洗白名单与 `stripForeignImages` 不动（资讯段已在用，产品段复用同一份判断）

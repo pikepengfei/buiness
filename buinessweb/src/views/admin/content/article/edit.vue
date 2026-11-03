@@ -32,11 +32,12 @@ const publishing = ref(false);
 const cats = ref<ArticleCategoryAdminRow[]>([]);
 const editorRef = ref<InstanceType<typeof RichBodyEditor> | null>(null);
 
-const form = ref<ArticleDraftPayload & { slug: string; title: string; tags: string[] }>({
-  slug: '', title: '', coverImage: '', summary: '', body: '', categoryId: null, tags: [], author: '',
+const form = ref<ArticleDraftPayload & { title: string; tags: string[] }>({
+  title: '', coverImage: '', summary: '', body: '', categoryId: null, tags: [], author: '',
 });
 const tagInput = ref('');
-const slugError = ref('');
+// 标识不在表单里：它由服务端在创建时生成，本页只读回显（新建时等创建响应，编辑时等取数行）
+const slug = ref('');
 // 与最近一次落库的表单快照比对：加载后不该显示「有未保存的编辑」，深监听 form 做不到这一点
 const snapshot = ref('');
 
@@ -49,8 +50,8 @@ const isOnline = computed(() => doc.value?.origin === 'online');
 const readOnly = computed(() => !canWrite.value || isOnline.value);
 const noticeDismissed = ref(false);
 
-const liveUrl = computed(() => (isOnline.value && form.value.slug.trim() ? `/article/${form.value.slug.trim()}` : ''));
-const pendingUrl = computed(() => (!isOnline.value && form.value.slug.trim() ? `/article/${form.value.slug.trim()}` : ''));
+const liveUrl = computed(() => (isOnline.value && slug.value ? `/article/${slug.value}` : ''));
+const pendingUrl = computed(() => (!isOnline.value && slug.value ? `/article/${slug.value}` : ''));
 const dirty = computed(() => snapshot.value !== JSON.stringify(form.value));
 
 function routeIds() {
@@ -73,14 +74,15 @@ async function load() {
     if (!row) {
       uid.value = '';
       draftId.value = null;
-      form.value = { slug: '', title: '', coverImage: '', summary: '', body: '', categoryId: null, tags: [], author: '' };
+      slug.value = '';
+      form.value = { title: '', coverImage: '', summary: '', body: '', categoryId: null, tags: [], author: '' };
       snapshot.value = JSON.stringify(form.value);
       return;
     }
     uid.value = row.uid;
     draftId.value = row.origin === 'draft' ? row.id : null;
+    slug.value = row.slug || '';
     form.value = {
-      slug: row.slug || '',
       title: row.title || '',
       coverImage: row.cover_image || '',
       summary: row.summary || '',
@@ -90,7 +92,6 @@ async function load() {
       author: row.author || '',
     };
     snapshot.value = JSON.stringify(form.value);
-    slugError.value = '';
   } catch (e: any) {
     ElMessage.error(e?.message || '加载失败');
   } finally {
@@ -111,7 +112,6 @@ function warnStripped(n: number) {
 }
 function payload(): ArticleDraftPayload {
   return {
-    slug: form.value.slug.trim(),
     title: form.value.title.trim(),
     coverImage: form.value.coverImage || null,
     summary: form.value.summary || null,
@@ -133,6 +133,8 @@ async function persistDraft(): Promise<number | null> {
   const c = await cmsAdmin.articleDrafts.create(b);
   uid.value = c.uid;
   draftId.value = c.id;
+  // 标识由服务端在这一步生成，响应直接带回来回显，不必等重新取数
+  slug.value = c.slug;
   warnStripped(c.stripped_images);
   // 未发布行只能挂在 query 上：不写回地址，刷新就回到空白新增页，再存一次会多出一条草稿
   skipWatch = true;
@@ -141,9 +143,7 @@ async function persistDraft(): Promise<number | null> {
 }
 
 function validate(): boolean {
-  slugError.value = '';
   if (!form.value.title.trim()) { ElMessage.warning('请填写标题'); return false; }
-  if (!form.value.slug.trim()) { ElMessage.warning('请填写标识'); return false; }
   return true;
 }
 
@@ -155,9 +155,7 @@ async function saveDraft() {
     snapshot.value = JSON.stringify(form.value);
     ElMessage.success('已保存');
   } catch (e: any) {
-    const msg = e?.response?.data?.message || e?.message || '保存失败';
-    if (e?.response?.status === 409) slugError.value = msg; // 唯一冲突就地提示，不只在右上角闪一下
-    else ElMessage.error(msg);
+    ElMessage.error(e?.response?.data?.message || e?.message || '保存失败');
   } finally {
     saving.value = false;
   }
@@ -185,9 +183,7 @@ async function saveAndPublish() {
     if (res.stripped_images > 0) ElMessage.warning(`正文中 ${res.stripped_images} 张站外图片已被移除`);
     await load();
   } catch (e: any) {
-    const msg = e?.response?.data?.message || e?.message || '发布失败';
-    if (e?.response?.status === 409) slugError.value = msg;
-    else ElMessage.error(msg);
+    ElMessage.error(e?.response?.data?.message || e?.message || '发布失败');
   } finally {
     publishing.value = false;
   }
@@ -333,7 +329,7 @@ async function copyUrl(path: string) {
           <span class="ae-url-v">{{ pendingUrl }}</span>
           <el-tag size="small" type="info" effect="plain">发布后生效</el-tag>
         </template>
-        <span v-else class="ae-url-none">填写标识后生成</span>
+        <span v-else class="ae-url-none">保存后自动生成</span>
       </div>
     </el-card>
 
@@ -346,8 +342,13 @@ async function copyUrl(path: string) {
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="标识" required :validate-status="slugError ? 'error' : ''" :message="slugError || ''">
-              <el-input v-model="form.slug" :disabled="readOnly" placeholder="URL 片段，如：launch-2024" @input="slugError = ''" />
+            <el-form-item label="标识">
+              <!-- 位置与原来一致，只是从输入框换成只读展示：标识由服务端在保存时生成，此后冻结 -->
+              <div class="ae-slug-box">
+                <span class="ae-meta">{{ slug || '保存后自动生成' }}</span>
+                <span v-if="slug" class="ae-slug-url">/article/{{ slug }}</span>
+                <span v-else class="ae-slug-url">标识由系统在保存时生成，改名不影响官网地址</span>
+              </div>
             </el-form-item>
           </el-col>
           <el-col :span="8">
@@ -491,6 +492,18 @@ async function copyUrl(path: string) {
 .ae-meta {
   font-size: 13px;
   color: #606266;
+}
+/* 标识只读展示位：短码在上，官网地址在下，位置沿用原来那个输入框的格子 */
+.ae-slug-box {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.5;
+}
+.ae-slug-url {
+  font-size: 12px;
+  color: #909399;
+  word-break: break-all;
 }
 .ae-cover {
   display: flex;

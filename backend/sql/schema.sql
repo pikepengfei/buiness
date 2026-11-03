@@ -151,7 +151,7 @@ CREATE TRIGGER trg_pages_updated_at BEFORE UPDATE ON pages
 CREATE TABLE article_categories (
   id          BIGSERIAL PRIMARY KEY,
   name        VARCHAR(50)  NOT NULL,
-  slug        VARCHAR(80)  NOT NULL UNIQUE,
+  slug        VARCHAR(80)  NOT NULL UNIQUE,   -- 服务端在创建时生成（ac- + 6 位 [a-z0-9]），此后冻结、无写入路径
   description VARCHAR(255),
   sort        INT          NOT NULL DEFAULT 0,
   created_at  TIMESTAMPTZ  NOT NULL DEFAULT NOW()
@@ -163,7 +163,7 @@ CREATE TABLE article_categories (
 CREATE TABLE articles (
   id           BIGSERIAL PRIMARY KEY,
   uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：跨表搬运不改，本表内唯一；审计 entity_id 记本列
-  slug         VARCHAR(100) NOT NULL UNIQUE,       -- 线上标识，决定官网地址 /article/{slug}
+  slug         VARCHAR(100) NOT NULL UNIQUE,       -- 线上标识，决定官网地址 /article/{slug}；服务端创建时生成（a- + 6 位）后冻结
   title        VARCHAR(200) NOT NULL,
   cover_image  TEXT,
   summary      VARCHAR(400),
@@ -193,7 +193,7 @@ CREATE INDEX idx_articles_search  ON articles USING gin(to_tsvector('simple', ti
 CREATE TABLE article_drafts (
   id           BIGSERIAL PRIMARY KEY,
   uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：与 articles.uid 同值随行搬运，不得重新生成
-  slug         VARCHAR(100) NOT NULL UNIQUE,       -- 未发布标识，与 articles.slug 跨两表共同判唯一
+  slug         VARCHAR(100) NOT NULL UNIQUE,       -- 未发布标识，与 articles.slug 跨两表共同判唯一；随行搬运不改，无写入路径
   title        VARCHAR(200) NOT NULL,
   cover_image  TEXT,
   summary      VARCHAR(400),
@@ -229,7 +229,7 @@ CREATE INDEX idx_article_view_dedupe_window ON article_view_dedupe(article_id, v
 CREATE TABLE product_categories (
   id          BIGSERIAL PRIMARY KEY,
   name        VARCHAR(80)  NOT NULL,
-  slug        VARCHAR(100) NOT NULL UNIQUE,
+  slug        VARCHAR(100) NOT NULL UNIQUE,   -- 服务端在创建时生成（pc- + 6 位 [a-z0-9]），此后冻结、无写入路径
   description VARCHAR(255),
   parent_id   BIGINT REFERENCES product_categories(id) ON DELETE CASCADE,
   sort        INT          NOT NULL DEFAULT 0,
@@ -244,7 +244,7 @@ CREATE INDEX idx_prod_cat_parent ON product_categories(parent_id, sort);
 CREATE TABLE products (
   id           BIGSERIAL PRIMARY KEY,
   uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：跨表搬运不改，本表内唯一；审计 entity_id 记本列
-  slug         VARCHAR(120) NOT NULL UNIQUE,       -- 线上标识，决定官网地址 /product/{slug}
+  slug         VARCHAR(120) NOT NULL UNIQUE,       -- 线上标识，决定官网地址 /product/{slug}；服务端创建时生成（p- + 6 位）后冻结
   name         VARCHAR(160) NOT NULL,
   category_id  BIGINT REFERENCES product_categories(id) ON DELETE SET NULL,
   series       VARCHAR(80),                         -- 产品系列，如 Exos / BarraCuda / LaCie
@@ -278,7 +278,7 @@ CREATE INDEX idx_products_search ON products USING gin(to_tsvector('simple', nam
 CREATE TABLE product_drafts (
   id           BIGSERIAL PRIMARY KEY,
   uid          UUID         NOT NULL DEFAULT gen_random_uuid(), -- 内容身份：与 products.uid 同值随行搬运，不得重新生成
-  slug         VARCHAR(120) NOT NULL UNIQUE,       -- 未上架标识，与 products.slug 跨两表共同判唯一
+  slug         VARCHAR(120) NOT NULL UNIQUE,       -- 未上架标识，与 products.slug 跨两表共同判唯一；随行搬运不改，无写入路径
   name         VARCHAR(160) NOT NULL,
   category_id  BIGINT REFERENCES product_categories(id) ON DELETE SET NULL,
   series       VARCHAR(80),

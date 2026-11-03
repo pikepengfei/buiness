@@ -1,3 +1,4 @@
+import { randomInt } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { query, queryPaginated, transaction } from '../db.js';
@@ -128,6 +129,47 @@ function diffKey(v: any): string {
     return `{${Object.keys(v).sort().map((k) => `${k}:${diffKey(v[k])}`).join(',')}}`;
   }
   return String(v);
+}
+
+// ---------------- 标识（slug）生成 ----------------
+// 标识不再由运营手填：由服务端在创建落库那一刻生成并写入 slug 列，此后冻结（详见 docs/标识自动生成方案.md）。
+// 形态取不透明短码 `{前缀}-{6位}`，字符集 [a-z0-9]。否决拼音转写：多音字与生僻字不可靠，
+// 中文名转出来是一长串，既不可读也更容易撞车，而项目约定不为此新增 npm 依赖。
+const SLUG_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+const SLUG_TAIL_LEN = 6;
+// 36^6 ≈ 20 亿组合，撞车概率极低；重试上限内仍冲突就放手让 INSERT 去撞 UNIQUE（全局 23505 → 409），
+// 不静默改名——一次创建请求给出两个不同标识比创建失败更难解释
+const SLUG_GEN_ATTEMPTS = 5;
+
+function randomSlug(prefix: string): string {
+  let tail = '';
+  for (let i = 0; i < SLUG_TAIL_LEN; i += 1) tail += SLUG_ALPHABET[randomInt(SLUG_ALPHABET.length)];
+  return `${prefix}-${tail}`;
+}
+
+// 单表占用判定（分类只有一张表）。表名来自代码里的字面量，不含外部输入
+async function isSlugTaken(table: string, slug: string): Promise<boolean> {
+  const { rows } = await query(`SELECT 1 FROM ${table} WHERE slug=$1 LIMIT 1`, [slug]);
+  return !!rows[0];
+}
+
+// 内容标识的占用判定跨两张表：未上线行与线上行共同判唯一，
+// 否则要等发布事务里才炸成一次搬运失败——那是运营最不预期的时刻
+async function isContentSlugTaken(onlineTable: string, draftTable: string, slug: string): Promise<boolean> {
+  const { rows } = await query(
+    `SELECT 1 FROM ${onlineTable} WHERE slug=$1
+     UNION ALL
+     SELECT 1 FROM ${draftTable} WHERE slug=$1
+     LIMIT 1`, [slug]);
+  return !!rows[0];
+}
+
+async function genSlug(prefix: string, taken: (slug: string) => Promise<boolean>): Promise<string> {
+  for (let i = 0; i < SLUG_GEN_ATTEMPTS; i += 1) {
+    const candidate = randomSlug(prefix);
+    if (!(await taken(candidate))) return candidate;
+  }
+  return randomSlug(prefix);
 }
 
 // 素材引用扫描：objectKey 是访问 URL 的子串，整行转文本匹配即可同时覆盖两种存法。
@@ -285,16 +327,31 @@ export async function contentRoutes(app: FastifyInstance) {
          FROM article_categories c ORDER BY c.sort, c.id`);
     return ok(r, rows);
   });
+  // 分类标识与产品侧同构改为服务端生成；名称/描述长度上限同样对齐产品分类，
+  // 这一段过去只有 `.parse()`（字段缺失直接抛成 500）且完全没有长度校验
+  const articleCategorySchema = z.object({
+    name: z.string().min(1).max(80),
+    description: z.string().max(255).nullish(),
+    sort: z.coerce.number().int().min(0).max(999999).default(0),
+  });
   app.post('/article-categories', { preHandler: write }, async (req, reply) => {
-    const b = z.object({ name: z.string(), slug: z.string(), description: z.string().optional(), sort: z.coerce.number().default(0) }).parse(req.body);
-    const { rows } = await query(`INSERT INTO article_categories(name,slug,description,sort) VALUES($1,$2,$3,$4) RETURNING id`,
-      [b.name, b.slug, b.description || null, b.sort]);
-    return ok(reply, { id: rows[0].id });
+    const parsed = articleCategorySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(reply, 400, '参数错误：名称必填且长度受限', ErrCode.BAD_REQUEST);
+    }
+    const b = parsed.data;
+    const slug = await genSlug('ac', (s) => isSlugTaken('article_categories', s));
+    const { rows } = await query(
+      `INSERT INTO article_categories(name,slug,description,sort) VALUES($1,$2,$3,$4) RETURNING id`,
+      [b.name, slug, b.description || null, b.sort]);
+    return ok(reply, { id: rows[0].id, slug });
   });
   app.patch('/article-categories/:id', { preHandler: write }, async (req, reply) => {
     const b = req.body as any; const id = Number((req.params as any).id);
     const sets: string[] = []; const p: any[] = []; let i = 1;
-    for (const k of ['name', 'slug', 'description', 'sort']) if (b[k] !== undefined) { sets.push(`${k}=$${i++}`); p.push(b[k]); }
+    // 标识不在可写列里：创建时生成后即冻结，外部提交的那份被 zod/映射表挡在库外
+    for (const k of ['name', 'description', 'sort']) if (b[k] !== undefined) { sets.push(`${k}=$${i++}`); p.push(b[k]); }
+    if (!sets.length) return fail(reply, 400, '无更新字段', ErrCode.NO_UPDATE_FIELD);
     p.push(id);
     await query(`UPDATE article_categories SET ${sets.join(',')} WHERE id=$${i}`, p);
     return ok(reply);
@@ -332,9 +389,9 @@ export async function contentRoutes(app: FastifyInstance) {
   const uidField = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
     'uid 必须是合法的内容身份标识');
 
-  // 草稿可编辑列与 articles 一一对应；刻意不含 status，zod 会丢弃未知键，多传也无效
+  // 草稿可编辑列与 articles 一一对应；刻意不含 status，zod 会丢弃未知键，多传也无效。
+  // 标识（slug）同样不在写入体里：由服务端在创建时生成并落库，此后冻结，外部提交的 slug 被 zod 丢弃
   const draftCreateSchema = z.object({
-    slug: z.string().min(1).max(100),
     title: z.string().min(1).max(200),
     // 可空列用 nullish：PATCH 里「传 null = 清空该列」「不传 = 不动该列」必须区分得开
     coverImage: z.string().max(500).nullish(),
@@ -348,9 +405,9 @@ export async function contentRoutes(app: FastifyInstance) {
   // 必填 uid：不给 .nullish() 兜旧调用，签名不留兼容
   const draftPatchSchema = draftCreateSchema.partial().extend({ uid: uidField });
   const publishBodySchema = z.object({ uid: uidField });
-  // zod 字段名 → 表列名
+  // zod 字段名 → 表列名（PATCH 的可写列清单；标识不在其中，创建后即冻结）
   const DRAFT_FIELDS: [key: string, col: string][] = [
-    ['slug', 'slug'], ['title', 'title'], ['coverImage', 'cover_image'], ['summary', 'summary'],
+    ['title', 'title'], ['coverImage', 'cover_image'], ['summary', 'summary'],
     ['body', 'body'], ['categoryId', 'category_id'], ['tags', 'tags'], ['author', 'author'],
   ];
 
@@ -365,26 +422,6 @@ export async function contentRoutes(app: FastifyInstance) {
     return origin === 'online' ? 'published' : (Number(state) === 2 ? 'offline' : 'draft');
   }
 
-  // 标识唯一性跨两表预检：区分「撞线上」与「撞别的草稿」，不让 23505 冒成 500
-  async function assertArticleSlugFree(
-    slug: string,
-    reply: any,
-    excludeDraftId?: number | null,
-  ): Promise<boolean> {
-    const { rows } = await query<{ owner: string }>(
-      `SELECT 'online' AS owner FROM articles WHERE slug=$1
-       UNION ALL
-       SELECT 'draft'  FROM article_drafts WHERE slug=$1 AND id IS DISTINCT FROM $2
-       LIMIT 1`,
-      [slug, excludeDraftId ?? null]);
-    if (!rows[0]) return true;
-    const msg = rows[0].owner === 'online'
-      ? `标识「${slug}」已被线上资讯占用，请换一个标识或先下线对应内容`
-      : `标识「${slug}」已被另一条草稿占用，请换一个标识或删除该草稿`;
-    fail(reply, 409, msg, ErrCode.SLUG_EXISTS);
-    return false;
-  }
-
   // 行 id 与 uid 是否指向同一条内容：不符一律拒绝，MUST NOT 按 id 猜测（spec「不猜测」场景）
   async function assertDraftIdentity(draftId: number, uid: string, reply: any): Promise<boolean> {
     const { rows } = await query<{ uid: string }>(
@@ -397,29 +434,29 @@ export async function contentRoutes(app: FastifyInstance) {
     return true;
   }
 
-  // 新建草稿：只落草稿表 state=0、没有发布时间可言。
+  // 新建草稿：只落草稿表 state=0、没有发布时间可言。标识在这一刻生成并与行同笔写入。
   // 界面「保存并发布」= 本接口 + 发布接口两次调用，「新建时直接发布」的正文下限由发布侧统一校验。
   app.post('/articles/drafts', { preHandler: write }, async (req, reply) => {
     const parsed = draftCreateSchema.safeParse(req.body);
-    if (!parsed.success) return fail(reply, 400, '参数错误：标识与标题必填，且各字段长度受限', ErrCode.BAD_REQUEST);
+    if (!parsed.success) return fail(reply, 400, '参数错误：标题必填，且各字段长度受限', ErrCode.BAD_REQUEST);
     const b = parsed.data;
-    if (!(await assertArticleSlugFree(b.slug, reply))) return;
+    const slug = await genSlug('a', (s) => isContentSlugTaken('articles', 'article_drafts', s));
     const cleaned = cleanArticleBody(b.body ?? '');
     const { rows } = await query<{ id: number; uid: string }>(
       `INSERT INTO article_drafts(slug,title,cover_image,summary,body,category_id,tags,author,state,created_by,updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,0,$9,$9) RETURNING id, uid`,
-      [b.slug, b.title, b.coverImage || null, b.summary || null, cleaned.html,
+      [slug, b.title, b.coverImage || null, b.summary || null, cleaned.html,
        b.categoryId ?? null, jsonb(b.tags), b.author || null, req.user!.id]);
     const uid = String(rows[0].uid);
     await auditArticle(req, 'create', uid, {
       fields: ['slug', 'title', 'cover_image', 'summary', 'body', 'category_id', 'tags', 'author'],
       from: {},
       to: {
-        slug: b.slug, title: b.title, cover_image: b.coverImage || null, summary: b.summary || null,
+        slug, title: b.title, cover_image: b.coverImage || null, summary: b.summary || null,
         body: bodyDigest(cleaned.html), category_id: b.categoryId ?? null, tags: b.tags, author: b.author || null,
       },
     });
-    return ok(reply, { id: rows[0].id, uid, stripped_images: cleaned.stripped });
+    return ok(reply, { id: rows[0].id, uid, slug, stripped_images: cleaned.stripped });
   });
 
   // 保存草稿改动：只写草稿行（草稿与已下线同表同规则），线上内容根本不在本表的可达范围内
@@ -435,7 +472,6 @@ export async function contentRoutes(app: FastifyInstance) {
     }
     if (!(await assertDraftIdentity(draftId, parsed.data.uid, reply))) return;
     const b = parsed.data as Record<string, any>;
-    if (b.slug !== undefined && !(await assertArticleSlugFree(b.slug, reply, draftId))) return;
 
     const { rows: before } = await query<Record<string, any>>(
       `SELECT slug,title,cover_image,summary,body,category_id,tags,author FROM article_drafts WHERE id=$1`, [draftId]);
@@ -705,12 +741,9 @@ export async function contentRoutes(app: FastifyInstance) {
          FROM product_categories c ORDER BY c.sort, c.id`);
     return ok(r, rows);
   });
-  // 分类标识与产品标识同一格式规则（design D5）：不落库的输入校验不做成两套
-  const categorySlugSchema = z.string().min(1).max(100).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/,
-    '标识只能由小写字母、数字与连字符组成');
+  // 分类标识与产品标识同构改为服务端生成（design D5 的「标识可变」口径已由「生成后冻结」取代）
   const categorySchema = z.object({
     name: z.string().min(1).max(80),
-    slug: categorySlugSchema,
     description: z.string().max(255).nullish(),
     parentId: z.coerce.number().int().positive().nullable().optional(),
     sort: z.coerce.number().int().min(0).max(999999).default(0),
@@ -718,29 +751,21 @@ export async function contentRoutes(app: FastifyInstance) {
   app.post('/product-categories', { preHandler: write }, async (req, reply) => {
     const parsed = categorySchema.safeParse(req.body);
     if (!parsed.success) {
-      const first = parsed.error.issues[0];
-      return fail(reply, 400, first?.path?.[0] === 'slug'
-        ? `分类标识不合法：${first.message}`
-        : '参数错误：名称与标识必填，且各字段长度受限', ErrCode.BAD_REQUEST);
+      return fail(reply, 400, '参数错误：名称必填，且各字段长度受限', ErrCode.BAD_REQUEST);
     }
     const b = parsed.data;
-    if (!(await assertSlugFree('product_categories', b.slug, reply))) return;
+    const slug = await genSlug('pc', (s) => isSlugTaken('product_categories', s));
     const { rows } = await query(
       `INSERT INTO product_categories(name,slug,description,parent_id,sort) VALUES($1,$2,$3,$4,$5) RETURNING id`,
-      [b.name, b.slug, b.description || null, b.parentId || null, b.sort]);
-    return ok(reply, { id: rows[0].id });
+      [b.name, slug, b.description || null, b.parentId || null, b.sort]);
+    return ok(reply, { id: rows[0].id, slug });
   });
   app.patch('/product-categories/:id', { preHandler: write }, async (req, reply) => {
     const id = Number((req.params as any).id);
     const b = req.body as any;
-    if (b.slug !== undefined) {
-      const checked = categorySlugSchema.safeParse(b.slug);
-      if (!checked.success) return fail(reply, 400, `分类标识不合法：${checked.error.issues[0].message}`, ErrCode.BAD_REQUEST);
-      const { rows } = await query(`SELECT 1 FROM product_categories WHERE slug=$1 AND id<>$2`, [b.slug, id]);
-      if (rows[0]) return fail(reply, 409, `标识「${b.slug}」已被其他分类占用，请换一个标识`, ErrCode.SLUG_EXISTS);
-    }
     const sets: string[] = []; const p: any[] = []; let i = 1;
-    for (const k of ['name', 'slug', 'description', 'parentId', 'sort']) if (b[k] !== undefined) { sets.push(`${k === 'parentId' ? 'parent_id' : k}=$${i++}`); p.push(b[k]); }
+    // 标识不在可写列里：创建时生成后即冻结
+    for (const k of ['name', 'description', 'parentId', 'sort']) if (b[k] !== undefined) { sets.push(`${k === 'parentId' ? 'parent_id' : k}=$${i++}`); p.push(b[k]); }
     if (!sets.length) return fail(reply, 400, '无更新字段', ErrCode.NO_UPDATE_FIELD);
     p.push(id);
     await query(`UPDATE product_categories SET ${sets.join(',')} WHERE id=$${i}`, p);
@@ -789,9 +814,9 @@ export async function contentRoutes(app: FastifyInstance) {
     .default([])
     .transform((v) => v.map((s) => s.trim()).filter(Boolean));
 
-  // 草稿可编辑列与 products 一一对应；刻意不含 status——上线只能由发布动作产生
+  // 草稿可编辑列与 products 一一对应；刻意不含 status——上线只能由发布动作产生。
+  // 标识同样不在写入体里：由服务端在创建时生成并落库，此后冻结，外部提交的 slug 被 zod 丢弃
   const productDraftCreateSchema = z.object({
-    slug: z.string().min(1).max(120).regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, '标识只能由小写字母、数字与连字符组成'),
     name: z.string().min(1).max(160),
     // 分类 id 是 bigint 列，node-pg 按字符串回传，编辑器原样提交："5" 与 5 必须是同一个分类
     categoryId: z.coerce.number().int().positive().nullable().optional(),
@@ -814,9 +839,10 @@ export async function contentRoutes(app: FastifyInstance) {
     sort: z.coerce.number().int().min(0).max(999999),
   });
 
-  // zod 字段名 → 表列名（两表列名一致，草稿与线上共用同一份映射）
+  // zod 字段名 → 表列名（PATCH 的可写列清单；标识不在其中，创建后即冻结）。
+  // 两表列名一致，草稿与线上共用同一份映射
   const PRODUCT_DRAFT_FIELDS: [key: string, col: string][] = [
-    ['slug', 'slug'], ['name', 'name'], ['categoryId', 'category_id'], ['series', 'series'],
+    ['name', 'name'], ['categoryId', 'category_id'], ['series', 'series'],
     ['coverImage', 'cover_image'], ['gallery', 'gallery'], ['summary', 'summary'],
     ['description', 'description'], ['specs', 'specs'], ['highlights', 'highlights'],
     ['priceText', 'price_text'], ['buyLink', 'buy_link'], ['sort', 'sort'],
@@ -840,26 +866,6 @@ export async function contentRoutes(app: FastifyInstance) {
     return { ...row, specs, gallery: arr(row.gallery), highlights: arr(row.highlights).map((s: any) => String(s)) };
   }
 
-  // 标识唯一性跨两表预检：区分「撞线上」与「撞别的未上架条目」，不让 23505 冒成 500
-  async function assertProductSlugFree(
-    slug: string,
-    reply: any,
-    excludeDraftId?: number | null,
-  ): Promise<boolean> {
-    const { rows } = await query<{ owner: string }>(
-      `SELECT 'online' AS owner FROM products WHERE slug=$1
-       UNION ALL
-       SELECT 'draft'  FROM product_drafts WHERE slug=$1 AND id IS DISTINCT FROM $2
-       LIMIT 1`,
-      [slug, excludeDraftId ?? null]);
-    if (!rows[0]) return true;
-    const msg = rows[0].owner === 'online'
-      ? `标识「${slug}」已被线上产品占用，请换一个标识或先下架对应内容`
-      : `标识「${slug}」已被另一条未上架产品占用，请换一个标识或删除该产品`;
-    fail(reply, 409, msg, ErrCode.SLUG_EXISTS);
-    return false;
-  }
-
   // 行 id 与 uid 是否指向同一条内容：不符一律拒绝，MUST NOT 按 id 猜测（spec「不猜测」场景）
   async function assertProductDraftIdentity(draftId: number, uid: string, reply: any): Promise<boolean> {
     const { rows } = await query<{ uid: string }>(`SELECT uid FROM product_drafts WHERE id=$1`, [draftId]);
@@ -881,40 +887,40 @@ export async function contentRoutes(app: FastifyInstance) {
     return true;
   }
 
-  // 新建未上架产品：只落 product_drafts 的 state=0 行，没有上架时间可言。
+  // 新建未上架产品：只落 product_drafts 的 state=0 行，没有上架时间可言。标识在这一刻生成并与行同笔写入。
   // 界面「保存并发布」= 本接口 + 发布接口两次调用
   app.post('/products/drafts', { preHandler: write }, async (req, reply) => {
     const parsed = productDraftCreateSchema.safeParse(req.body);
     if (!parsed.success) {
       const first = parsed.error.issues[0];
       const field = first?.path?.[0];
-      return fail(reply, 400, field === 'slug'
-        ? `产品标识不合法：${first.message}`
-        : field ? `参数错误：${String(field)} 不符合要求（${first.message}）` : '参数错误：名称与标识必填，规格/图集/卖点有长度与条数上限',
-        ErrCode.BAD_REQUEST);
+      return fail(reply, 400, field
+        ? `参数错误：${String(field)} 不符合要求（${first.message}）`
+        : '参数错误：名称必填，规格/图集/卖点有长度与条数上限', ErrCode.BAD_REQUEST);
     }
     const b = parsed.data;
-    if (!(await assertProductSlugFree(b.slug, reply))) return;
+    const slug = await genSlug('p', (s) => isContentSlugTaken('products', 'product_drafts', s));
     const cleaned = cleanProductDescription(b.description ?? '');
     const { rows } = await query<{ id: number; uid: string }>(
       `INSERT INTO product_drafts(slug,name,category_id,series,cover_image,gallery,summary,description,
                                   specs,highlights,price_text,buy_link,sort,state,created_by,updated_by)
        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,0,$14,$14) RETURNING id, uid`,
-      [b.slug, b.name, b.categoryId ?? null, b.series || null, b.coverImage || null, jsonb(b.gallery),
+      [slug, b.name, b.categoryId ?? null, b.series || null, b.coverImage || null, jsonb(b.gallery),
        b.summary || null, cleaned.html || null, jsonb(b.specs), jsonb(b.highlights),
        b.priceText || null, b.buyLink || null, b.sort, req.user!.id]);
     const uid = String(rows[0].uid);
     await auditProduct(req, 'create', uid, {
-      fields: PRODUCT_DRAFT_FIELDS.map(([, col]) => col),
+      // 标识是服务端本次生成的写入列，照旧进创建审计：清单与改造前逐列一致
+      fields: ['slug', ...PRODUCT_DRAFT_FIELDS.map(([, col]) => col)],
       from: {},
       to: {
-        slug: b.slug, name: b.name, category_id: b.categoryId ?? null, series: b.series || null,
+        slug, name: b.name, category_id: b.categoryId ?? null, series: b.series || null,
         cover_image: b.coverImage || null, gallery: b.gallery, summary: b.summary || null,
         description: bodyDigest(cleaned.html), specs: b.specs, highlights: b.highlights,
         price_text: b.priceText || null, buy_link: b.buyLink || null, sort: b.sort,
       },
     });
-    return ok(reply, { id: rows[0].id, uid, stripped_images: cleaned.stripped });
+    return ok(reply, { id: rows[0].id, uid, slug, stripped_images: cleaned.stripped });
   });
 
   // 保存未上架产品的改动（草稿与已下架同表同规则）：线上内容根本不在本表的可达范围内
@@ -926,13 +932,10 @@ export async function contentRoutes(app: FastifyInstance) {
       const field = first?.path?.[0];
       return fail(reply, 400, field === 'uid'
         ? '缺少或非法的 uid：写请求必须带上这条产品的内容身份标识'
-        : field === 'slug'
-          ? `产品标识不合法：${first.message}`
-          : field ? `参数错误：${String(field)} 不符合要求（${first.message}）` : '参数错误', ErrCode.BAD_REQUEST);
+        : field ? `参数错误：${String(field)} 不符合要求（${first.message}）` : '参数错误', ErrCode.BAD_REQUEST);
     }
     if (!(await assertProductDraftIdentity(draftId, parsed.data.uid, reply))) return;
     const b = parsed.data as Record<string, any>;
-    if (b.slug !== undefined && !(await assertProductSlugFree(b.slug, reply, draftId))) return;
 
     const { rows: before } = await query<Record<string, any>>(
       `SELECT slug,name,category_id,series,cover_image,gallery,summary,description,specs,highlights,price_text,buy_link,sort

@@ -25,18 +25,15 @@ import DescriptionEditor from './components/DescriptionEditor.vue';
 // 与 SpecsEditor 同名同形的本地声明：类型按结构匹配，两文件之间不做跨目录 import
 type ProductSpec = { label: string; value: string };
 type Form = {
-  slug: string; name: string; categoryId: number | null; series: string; coverImage: string;
+  name: string; categoryId: number | null; series: string; coverImage: string;
   gallery: string[]; summary: string; description: string; specs: ProductSpec[];
   highlights: string[]; priceText: string; buyLink: string; sort: number;
 };
 const emptyForm = (): Form => ({
-  slug: '', name: '', categoryId: null, series: '', coverImage: '', gallery: [], summary: '',
+  name: '', categoryId: null, series: '', coverImage: '', gallery: [], summary: '',
   description: '', specs: [], highlights: [], priceText: '', buyLink: '', sort: 0,
 });
 
-// 标识格式与服务端同一条正则：不符合就地提示，不等请求回来再报错
-const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-const FORMAT_HINT = '只能由小写字母、数字与连字符组成，如 portable-ssd';
 const HIGHLIGHT_MAX = 8;
 
 const route = useRoute();
@@ -60,17 +57,16 @@ const isOnline = computed(() => doc.value?.origin === 'online');
 // 只读的两种来源：没有写权限，或这条产品正在官网上（必须先下架才能改）
 const readOnly = computed(() => !canWrite.value || isOnline.value);
 const noticeDismissed = ref(false);
-const slugError = ref('');
+// 标识不在表单里：它由服务端在创建时生成，本页只读回显（新建时等创建响应，编辑时等取数行）
+const slug = ref('');
 // 与最近一次落库的表单快照比对：加载后不该显示「有未保存的编辑」，深监听 form 做不到这一点
 const snapshot = ref(JSON.stringify(form.value));
 // 用户是否已经动过表单：编辑器挂载时会把存量 HTML 规范化重写一遍（列表项补 <p>、属性换序），
 // 那不是运营的编辑。落过第一次真实交互之前的重写一律并入快照，不进「有未保存的编辑」
 const touched = ref(false);
-// 最近一次落库的标识：只有它变了才需要弹「旧地址失效」的后果确认
-const savedSlug = ref('');
 
-const liveUrl = computed(() => `/product/${form.value.slug.trim()}`);
-const hasSlug = computed(() => !!form.value.slug.trim());
+const liveUrl = computed(() => (slug.value ? `/product/${slug.value}` : ''));
+const hasSlug = computed(() => !!slug.value);
 const dirty = computed(() => snapshot.value !== JSON.stringify(form.value));
 
 function markTouched() {
@@ -81,10 +77,6 @@ function onDescription(v: string) {
   form.value.description = v;
   if (!touched.value) snapshot.value = JSON.stringify(form.value);
 }
-const slugBadFormat = computed(() =>
-  !!form.value.slug.trim() && !SLUG_RE.test(form.value.slug.trim()));
-// 服务端冲突（撞线上/撞草稿）优先于本地格式提示，两者不同时抢位置
-const slugHint = computed(() => slugError.value || (slugBadFormat.value ? FORMAT_HINT : ''));
 function routeIds() {
   const p = route.params.id ? Number(route.params.id) : null;
   const d = route.query.draft ? Number(route.query.draft) : null;
@@ -108,7 +100,7 @@ async function load() {
     if (!row) {
       uid.value = '';
       draftId.value = null;
-      savedSlug.value = '';
+      slug.value = '';
       form.value = emptyForm();
       snapshot.value = JSON.stringify(form.value);
       return;
@@ -116,8 +108,8 @@ async function load() {
     uid.value = row.uid;
     // 行 id 与分类 id 都是 BIGINT，驱动按字符串回传；统一转数字，寻址与下拉回填才不会被类型差拖住
     draftId.value = row.origin === 'draft' ? Number(row.id) : null;
+    slug.value = row.slug || '';
     form.value = {
-      slug: row.slug || '',
       name: row.name || '',
       categoryId: row.category_id == null ? null : Number(row.category_id),
       series: row.series || '',
@@ -132,8 +124,6 @@ async function load() {
       sort: Number(row.sort ?? 0),
     };
     snapshot.value = JSON.stringify(form.value);
-    savedSlug.value = row.slug || '';
-    slugError.value = '';
   } catch (e: any) {
     ElMessage.error(e?.response?.data?.message || e?.message || '加载失败');
   } finally {
@@ -155,7 +145,6 @@ function warnStripped(n: number) {
 
 function payload(): ProductDraftPayload {
   return {
-    slug: form.value.slug.trim(),
     name: form.value.name.trim(),
     categoryId: form.value.categoryId ?? null,
     series: form.value.series.trim() || null,
@@ -185,6 +174,8 @@ async function persistDraft(): Promise<number | null> {
   const c = await cmsAdmin.productDrafts.create(b);
   uid.value = c.uid;
   draftId.value = Number(c.id);
+  // 标识由服务端在这一步生成，响应直接带回来回显，不必等重新取数
+  slug.value = c.slug;
   warnStripped(c.stripped_images);
   // 未上架行只能挂在 query 上：不写回地址，刷新就回到空白新增页，再存一次会多出一条草稿
   skipWatch = true;
@@ -193,13 +184,7 @@ async function persistDraft(): Promise<number | null> {
 }
 
 function validate(): boolean {
-  slugError.value = '';
   if (!form.value.name.trim()) { ElMessage.warning('请填写产品名称'); return false; }
-  if (!form.value.slug.trim()) { ElMessage.warning('请填写产品标识'); return false; }
-  if (!SLUG_RE.test(form.value.slug.trim())) {
-    slugError.value = FORMAT_HINT;
-    return false;
-  }
   if (form.value.specs.some((s) => !s.label.trim() && !!s.value.trim())) {
     ElMessage.warning('规格参数缺参数名：填了值的行必须有参数名');
     return false;
@@ -211,38 +196,15 @@ function validate(): boolean {
   return true;
 }
 
-/**
- * 改标识的后果确认（资讯链没有这条，本链按 spec 补上）：
- * 已落过库的条目换标识会让旧地址失效，运营常常以为「改名不影响链接」
- */
-async function confirmSlugChange(): Promise<boolean> {
-  const next = form.value.slug.trim();
-  if (draftId.value == null || next === savedSlug.value) return true;
-  try {
-    await ElMessageBox.confirm(
-      `标识将从 /product/${savedSlug.value} 改为 /product/${next}。`
-      + '保存后旧地址立即失效，访客与外部已收录的链接会打到 404；'
-      + '重新上架后新地址才在官网生效，已下架期间该地址本就不可访问。确认修改？',
-      '修改标识的后果', { type: 'warning', confirmButtonText: '确认修改', cancelButtonText: '改回去' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function saveDraft() {
   if (readOnly.value || !validate() || saving.value) return;
-  if (!(await confirmSlugChange())) return;
   saving.value = true;
   try {
     await persistDraft();
     snapshot.value = JSON.stringify(form.value);
-    savedSlug.value = form.value.slug.trim();
     ElMessage.success('已保存');
   } catch (e: any) {
-    const msg = e?.response?.data?.message || e?.message || '保存失败';
-    if (e?.response?.status === 409) slugError.value = msg; // 唯一冲突就地提示，不只在右上角闪一下
-    else ElMessage.error(msg);
+    ElMessage.error(e?.response?.data?.message || e?.message || '保存失败');
   } finally {
     saving.value = false;
   }
@@ -252,14 +214,12 @@ async function saveDraft() {
 async function saveAndPublish() {
   if (readOnly.value || !validate() || publishing.value) return;
   // 详细描述可以为空（与资讯正文不同），这里不设非空下限，只把清洗边界交给服务端
-  if (!(await confirmSlugChange())) return;
   publishing.value = true;
   try {
     const id = await persistDraft();
     if (id == null) return;
     const res = await cmsAdmin.productDrafts.publish(id, uid.value);
     snapshot.value = JSON.stringify(form.value);
-    savedSlug.value = form.value.slug.trim();
     skipWatch = true;
     await router.replace(`/admin/content/products/edit/${res.id}`);
     ElMessage.success(res.first_published
@@ -267,9 +227,7 @@ async function saveAndPublish() {
       : `已上架，首次上架时间 ${fmt(res.published_at)} 与排序值 ${res.sort} 一并延续`);
     await load();
   } catch (e: any) {
-    const msg = e?.response?.data?.message || e?.message || '上架失败';
-    if (e?.response?.status === 409) slugError.value = msg;
-    else ElMessage.error(msg);
+    ElMessage.error(e?.response?.data?.message || e?.message || '上架失败');
   } finally {
     publishing.value = false;
   }
@@ -426,7 +384,7 @@ async function copyUrl(path: string) {
           <el-button link type="primary" size="small" @click="copyUrl(liveUrl)">复制</el-button>
           <el-tag v-if="!isOnline" size="small" type="info" effect="plain">上架后生效</el-tag>
         </template>
-        <span v-else class="pe-url-none">填写标识后生成</span>
+        <span v-else class="pe-url-none">保存后自动生成</span>
       </div>
     </el-card>
 
@@ -439,11 +397,12 @@ async function copyUrl(path: string) {
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="产品标识" required>
+            <el-form-item label="产品标识">
+              <!-- 位置与原来一致，只是从输入框换成只读展示：标识由服务端在保存时生成，此后冻结 -->
               <div class="field-with-hint">
-                <el-input v-model="form.slug" :disabled="readOnly" placeholder="URL 片段，如：portable-ssd" @input="slugError = ''" />
-                <!-- 不挂 el-form-item 的 message：该版本只把它写给校验器，服务端 409 文案会渲染成空。就地提示自己画 -->
-                <p v-if="slugHint" class="field-hint" :class="{ 'field-hint--error': !!slugError }">{{ slugHint }}</p>
+                <span class="pe-meta">{{ slug || '保存后自动生成' }}</span>
+                <p v-if="slug" class="field-hint">官网地址 {{ liveUrl }}；标识由系统生成，改名不影响地址</p>
+                <p v-else class="field-hint">标识由系统在保存时生成，改名不影响官网地址</p>
               </div>
             </el-form-item>
           </el-col>
@@ -642,9 +601,6 @@ async function copyUrl(path: string) {
   font-size: 12px;
   line-height: 1.4;
   color: #909399;
-}
-.field-hint--error {
-  color: var(--el-color-danger);
 }
 .pe-cover {
   display: flex;

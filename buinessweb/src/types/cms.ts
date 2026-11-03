@@ -234,10 +234,10 @@ export interface ProductEditable {
 /**
  * 未上架侧写入体：字段名与后端 productDraftCreateSchema 对齐（camelCase）。
  * 没有 status，也没有 uid——状态只能由发布/下架动作产生，uid 由调用方作为独立参数传入并被服务端断言。
+ * 也没有 slug——标识由服务端在创建时生成并写入，此后冻结，提交的那份被服务端丢弃。
  * categoryId 传 null 表示清除分类；不传（undefined）表示不改。
  */
 export interface ProductDraftPayload {
-  slug?: string;
   name?: string;
   categoryId?: number | null;
   series?: string | null;
@@ -336,9 +336,9 @@ export interface ArticleEditable {
 /**
  * 草稿写入体：字段名与后端 draftCreateSchema 对齐（camelCase）。
  * 没有 status——上线只能由发布动作产生，草稿侧不接受状态参数。
+ * 也没有 slug——标识由服务端在创建时生成并写入，此后冻结，提交的那份被服务端丢弃。
  */
 export interface ArticleDraftPayload {
-  slug?: string;
   title?: string;
   coverImage?: string | null;
   summary?: string | null;

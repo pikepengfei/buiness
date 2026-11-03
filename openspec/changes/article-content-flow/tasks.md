@@ -18,7 +18,7 @@
 > **2026-10-30 修订标记。** **2.3 的「确保副本行」入口整条撤销**（见 11.12）；**2.4** 的 `DELETE /articles/drafts/:draftId` 不再有「放弃改动」这层含义，只表示删除一条草稿/已下线内容；**2.5 / 2.6** 的发布语义由「按清单覆盖发布行」改为「整行搬运进发布表」，`uid`/`view_count`/`created_*` 都随行带过去（见 11.11）；**2.1/2.2/2.7/2.8** 不受影响；**2.9** 的审计动作集合保留，但记录形态由 11.16 改写（`entity_id` 改记 `uid`、启用 `diff`、刷新 `updated_by`）。
 
 - [x] 2.1 `POST /articles/drafts` 新建草稿行（只落草稿表、`published_id IS NULL`），默认草稿语义且不写发布时间；创建端点不接受「直接置为线上」的状态参数——上线只能走发布动作（`content.ts:243`、`[:250]` 的 `status=1` + `body` 可选一并移除），界面的「保存并发布」是两个动作串起来、不是创建端点多收一个状态
-- [x] 2.2 `PATCH /articles/drafts/:draftId` 的字段映射含 `slug`，只写草稿行；`assertSlugFree`（[content.ts:85](../../../backend/src/routes/content.ts)）扩为**同时查 `articles` 与 `article_drafts`**，冲突转 409 中文可读而不是 500，避免「与线上标识冲突要等发布才炸」
+- [x] 2.2 `PATCH /articles/drafts/:draftId` 的字段映射含 `slug`，只写草稿行；`assertSlugFree`（[content.ts:85](../../../backend/src/routes/content.ts)）扩为**同时查 `articles` 与 `article_drafts`**，冲突转 409 中文可读而不是 500，避免「与线上标识冲突要等发布才炸」 —— **口径已被第 13 组取代**：`DRAFT_FIELDS` 与 `draftCreateSchema` 都不再含 `slug`，`assertSlugFree`（资讯段即 `assertArticleSlugFree`）已删除，跨两表占用判定移入创建时的 `genSlug` + `isContentSlugTaken`
 - [x] 2.3 幂等的「确保副本行」入口：对已有发布行的条目（`status` 为 1 或 2）请求修订时，缺副本则按发布行的全部可编辑列复制一份并回填 `published_id`，已存在则原样返回；并发由 `UNIQUE (published_id)` 兜底
 - [x] 2.4 `DELETE /articles/drafts/:draftId` = 放弃未发布改动：只删草稿行；该行 `published_id` 非空时 MUST NOT 触碰发布行，为空时才是彻底删除一条草稿
 - [x] 2.5 `POST /articles/drafts/:draftId/publish` 一个事务内完成：无发布行 → 新建发布行并删除草稿行；有发布行 → 按固定列清单（正文/标题/摘要/封面/分类/标签/作者/标识）覆盖发布行 → 删除副本行 → `status=1`、`published_at = COALESCE(published_at, NOW())`；无副本行时只改状态，重复执行结果一致
@@ -71,18 +71,18 @@
 - [x] 6.3 新建 `article/components/RichBodyEditor.vue`：按 D9 清单装配扩展——`Heading` 限 `h2/h3/h4`，链接带 `target=_blank` + `rel=noopener noreferrer`，**不装** `TextAlign`/`TextStyle`/`Color`/`Highlight`/`Indent`/`Table`；工具栏用 Element Plus 按钮 + `@element-plus/icons-vue` 图标自绘，不引入编辑器自带样式表
 - [x] 6.4 正文图片插入调用共用 `MediaPicker`（只取其回传地址），不新增上传入口、不放行编辑器直传；粘贴内容由 schema 自动过滤，不做 Word 保真解析
 - [x] 6.5 编辑器不暴露站外图片输入：拖入外部图片或填入外链时拒绝并引导走素材库；与 2.8 的服务端剥除互为兜底
-- [x] 6.6 编辑页把「保存改动」与「发布」拆成两个动作：保存走 `PATCH /articles/drafts/:draftId`（无论线上状态如何都只落草稿行），发布走 `POST /articles/drafts/:draftId/publish`；存在未发布改动时在页顶显示标记与「放弃改动」，并显示当前线上地址与待生效地址
+- [x] 6.6 编辑页把「保存改动」与「发布」拆成两个动作：保存走 `PATCH /articles/drafts/:draftId`（无论线上状态如何都只落草稿行），发布走 `POST /articles/drafts/:draftId/publish`；存在未发布改动时在页顶显示标记与「放弃改动」，并显示当前线上地址与待生效地址（本条前半由第 11 组撤销，后半「当前线上地址 + 待生效地址」双行显示由第 13 组撤除——标识不可改，只读回显单行官网地址，见 13.6）
 - [x] 6.7 正文为空的判定前后端一致：`<p></p>`、纯空白视为空并在保存/发布前就地提示（服务端同样拒绝）
 - [x] 6.8 走查 D9 的裁剪清单：逐种能力边界内格式撰稿 → 保存 → 重新打开编辑器 → 官网渲染，三者逐项一致；确认工具栏无对齐/字号/颜色/缩进/表格入口（走查记录：工具栏 18 个入口只有 B/I/U/S、正文/H2/H3/H4、两个列表、引用、行内代码、代码块、链接、素材库图片、分隔线、撤销/重做；逐格式撰稿存为草稿后重开编辑器与入库 `body` 逐项一致（`contenteditable`/`draggable`/`ProseMirror-trailingBreak` 是 PM 运行时属性，不入库）；官网详情渲染同一批标签且 `[style]` 元素数为 0；粘贴含 `style`/`class`/`table`/`srcset`/`title` 的外部内容后，站外图 1 张被移除并提示数量，结构降级为 `<p>`，`font-weight:700` 经 Tiptap Bold 自身的 parse 规则转成 `<strong>`——即白名单内格式全留、白名单外全不出现）
 
 ## 7. 管理端资讯功能
 
-> **2026-10-30 修订标记。** **7.1** 的「一行两 id + 未发布改动列」、**7.2** 的按钮形态与「删除线上」文案、**7.3** 的「有副本显示副本」、**7.5/7.6** 的 `published_id`/`draft_id`/`has_unpublished_changes` 字段与 `ensureRevision` 方法全部由第 11 组（11.19–11.21）改写或撤除；**7.4**（标识可改与唯一提示）保留但降级：「线上地址 + 待生效地址」双行显示的前提是同一条目同时有两份，新模型下改为「发布后可访问的地址」单行显示 + 与在线条目撞标识时的拒止提示；**7.7**（标签与分类引用）、**7.8** 保留，7.9 的走查结论按第 11 组的新场景重跑。
+> **2026-10-30 修订标记。** **7.1** 的「一行两 id + 未发布改动列」、**7.2** 的按钮形态与「删除线上」文案、**7.3** 的「有副本显示副本」、**7.5/7.6** 的 `published_id`/`draft_id`/`has_unpublished_changes` 字段与 `ensureRevision` 方法全部由第 11 组（11.19–11.21）改写或撤除；**7.4**（标识可改与唯一提示）保留但降级：「线上地址 + 待生效地址」双行显示的前提是同一条目同时有两份，新模型下改为「发布后可访问的地址」单行显示 + 与在线条目撞标识时的拒止提示；**该降级已于 2026-11-02 进一步反向：标识不可改、只读回显，见 13.6**；**7.7**（标签与分类引用）、**7.8** 保留，7.9 的走查结论按第 11 组的新场景重跑。
 
 - [x] 7.1 列表按 3.4 的联合行渲染：一行两 id、状态取自统一常量、「未发布改动」列取自 `has_unpublished_changes`；分页控件与产品对齐（补每页条数选择），确认翻页不出现同一条目的重复行或漏行
 - [x] 7.2 按钮形态按 `published_id` 是否为空决定：为空（纯草稿）只有「发布」「删除草稿」；非空另有「下线」「删除线上」。删除线上且 `has_unpublished_changes` 为真时，确认文案追加「该条资讯的未发布改动会一并删除」
 - [x] 7.3 编辑页取数遵循 3.5：有副本行显示副本内容，重开编辑页 MUST 看到自己刚保存的改动（断点 ① 的界面验收）；「已下架」称谓订正为「已下线」
-- [x] 7.4 标识字段同产品侧（可修改、唯一校验就地提示、改标识触发后果确认），同时显示线上地址 `/article/{线上标识}` 与待生效地址 `/article/{草稿标识}`
+- [x] 7.4 标识字段同产品侧（可修改、唯一校验就地提示、改标识触发后果确认），同时显示线上地址 `/article/{线上标识}` 与待生效地址 `/article/{草稿标识}` —— **整条已由第 13 组反向取代**（见 13.6）：标识由服务端生成且冻结，界面在原位置只读回显单行「官网地址 /article/{slug}」，可修改、就地唯一提示、后果确认与「待生效地址」双行显示全部撤除
 - [x] 7.5 `types/cms.ts` 与 `api/cms.ts`：资讯行拆成 `published_id`/`draft_id` 两字段并补 `has_unpublished_changes`；方法分两组命名，前缀分别点明 id 归属（草稿组 `articleDrafts.*`，线上组 `articles.*`），详情类型补分类名称与标签，`ArticleCategory` 补 `sort`
 - [x] 7.6 `api/cms.ts` 补齐修订入口（确保副本行）、发布、下线、放弃改动、浏览上报五个方法，替换编辑页与列表页的裸 PATCH；不留旧签名别名
 - [x] 7.7 标签输入保留回车新增并去重；分类维护页只读展示跨两表的引用数量，删除被引用分类时显示服务端返回的占用数量提示
@@ -117,7 +117,7 @@
 
 ## 10. 验证与回滚
 
-> **2026-10-30 修订标记。** 本组的走查记录是 011 那版形态的实况，保留不改写；其中 **10.1 的「下线 = 状态 2」**、**10.2 的副本与「放弃改动」全链路**、**10.3 的「发起修订得副本」**、**10.4 的四形态与一行两 id**、**10.5 的 `online_slug` 待生效**、**10.6 的「删除挂着副本的发布行」**、**10.13 的 `POST /articles/11/revision`**、**10.15 的反向/前向核对（含 `copy_rows=1` 与四形态）**在新模型下不成立或形态改变，由第 11 组（11.24、11.25、11.27）重跑对应场景；**10.7–10.10、10.12、10.14** 的结论与本轮改动无关，继续有效（10.12 的占用数量仍跨两表统计，只是「线上 N 条、草稿 M 条」的分组文案要与 11.17 的状态称谓一并复核）；**10.11** 的缓存即时性结论不变，但对已下线资讯的上报会由「命中 `status=2` 的行、返回 `reason:"offline"`」变成「按标识查不到线上行、返回未命中」——判重与展示的其余行为一致。**10.16** 的六桶提交切分仍然成立，但要加上 012 的两个新文件与 `content.ts`/`types/cms.ts` 的第三轮 hunk。
+> **2026-10-30 修订标记。** 本组的走查记录是 011 那版形态的实况，保留不改写；其中 **10.1 的「下线 = 状态 2」**、**10.2 的副本与「放弃改动」全链路**、**10.3 的「发起修订得副本」**、**10.4 的四形态与一行两 id**、**10.5 的 `online_slug` 待生效**、**10.6 的「删除挂着副本的发布行」**、**10.13 的 `POST /articles/11/revision`**、**10.15 的反向/前向核对（含 `copy_rows=1` 与四形态）**在新模型下不成立或形态改变，由第 11 组（11.24、11.25、11.27）重跑对应场景；**10.7–10.10、10.12、10.14** 的结论与本轮改动无关，继续有效（10.12 的占用数量仍跨两表统计，只是「线上 N 条、草稿 M 条」的分组文案要与 11.17 的状态称谓一并复核）；**10.11** 的缓存即时性结论不变，但对已下线资讯的上报会由「命中 `status=2` 的行、返回 `reason:"offline"`」变成「按标识查不到线上行、返回未命中」——判重与展示的其余行为一致。**10.16** 的六桶提交切分仍然成立，但要加上 012 的两个新文件与 `content.ts`/`types/cms.ts` 的第三轮 hunk。**另：10.5 的整条验证对象（改标识、待生效地址、并发争抢同一标识）自 2026-11-02 起不存在——标识由服务端生成且冻结，该条由 13.12 取代。**
 
 - [x] 10.1 端到端走查资讯链：草稿（只在草稿表）→ 官网不可见 → 发布（生成发布行、时间写入、草稿行消失）→ 再次发布（时间不变）→ 下线（内容保留、状态 2）→ 直访详情 404 → 浏览量在有界范围内增长且详情页可见（走查记录：新建纯草稿时 `GET /public/articles` 不含其 slug；发布得 pub 15 且 `published_at=2026-10-29T11:29:47.290Z`、草稿行消失；后续三次发布 `published_at` 恒为该首次值；`unpublish` 后详情 `{data:null}` 而 `articles.status=2` 正文仍在；计数从详情页 1 起，curl 访客 A 得 2、同访客重复 `{"counted":false,"reason":"duplicate"}`、访客 B 得 3，详情页显示「阅读 3」）
 - [x] 10.2 双表分岔走查（断点 ①）：改一篇已发布资讯的正文并保存 → 重开编辑页仍是刚保存的内容且官网仍是旧内容且列表标记未发布改动 → 发布 → 官网一次到位、副本消失、发布时间未变、浏览量未清零 → 再改 → 放弃改动 → 编辑器回到线上内容；两个账号同时发布同一篇，线上等于其中一次结果（走查记录：编辑 pub 15 存为 draft 18 后官网仍是旧标题旧正文、`has_unpublished_changes=true`、页面出「存在未发布改动」告警；`location.reload()` 后编辑器仍是刚存的正文与标题；「保存并发布」提示「已发布（保留原发布时间与浏览量）」，官网标题/正文一次到位、`draft_id` 归 null、`published_at` 与 `view_count=3` 均未变；再改再存后点「放弃改动」（确认文案「放弃后未发布的改动将不可恢复，线上内容保持不变」）编辑器回到线上内容；同一 `draft_id` 并发两次 publish → 一次 `code:0`、一次 `3001 草稿不存在`，线上等于成功那次且无残留副本）
@@ -181,3 +181,37 @@
 - [x] 11.28 执行 `012_article_online_readonly.rollback.sql` 再前向一次，核对可重建与那唯一不可逆列（旧 `published_id` 关系无法恢复）的表现与脚本注释一致；确认「回退 012 但保留后端」会失败，故后端与迁移同批回退（演练记录 2026-10-30：先 `pg_dump -t articles -t article_drafts -t article_view_dedupe -t article_categories --data-only` 备份到 `/tmp/backup_article_012_rehearsal.sql`（98 行）再动手。首轮反向**失败并暴露一个顺序 bug**——脚本先把 `state=2` 的行 `INSERT` 回 `articles`、之后才放宽 `CHECK`，报 `new row for relation "articles" violates check constraint "articles_status_check"`（DETAIL 回显失败行 id 27 `example-offline-notice`）；已把 `DROP/ADD CONSTRAINT (1,2)` + `SET DEFAULT 0` 提到搬行之前并同步头注第 2/3 条，改后反向 → 前向整圈跑通。「回退 012 但保留后端」实测为管理面 500 `column a.uid does not exist`、同一时刻公开面三个端点全 200，与脚本头注「MUST 先把后端退回 011 那版契约再执行本脚本」一致。那唯一不可逆列的表现与注释相符：`ADD COLUMN published_id` 能重建，但降级为普通草稿的行不会重新挂回原线上内容；头注另补写第二条实测后果——反向 `DROP COLUMN uid` 后前向重跑，非种子行的 `uid` 由 `gen_random_uuid()` 重新生成（走查行 id 7 的 uid 从 `67e6c9d1…` 变成 `d01a85a3…`），回滚前按 uid 落库的 `audit_logs.entity_id` 因此接不上，只有固定 uid 的 012 种子能续上，属「回滚会切断修改记录时间线」的固有代价。演练后库形：`articles` 5 行且全部 `status=1`（7 大法师的 / 16 example-brand-launch / 18 example-storage-insight / 29 example-012-online-a / 30 example-012-online-b，id 7 的 `updated_by=1` 由 11.2 的 `updated_by=created_by` 回填）、`article_drafts` 5 行（1、2、12 为 `state=0`，11、13 为 `state=2` 且 13 带 `view_count=12` 与历史 `published_at`）、`published_id` 列计数 0、`articles_status_check = CHECK ((status = 1))`）
 - [x] 11.29 提交切分补充：本轮新增桶为 ⑦ 数据 012（两个新文件 + `schema.sql` 第三轮 hunk）、⑧ 后端搬运与留痕（`content.ts` 的 `unpublish`/`publish`/列表/审计段）、⑨ 前端形态（`types/cms.ts`/`api/cms.ts`/`article/{index,edit}.vue`）、⑩ 文档（`docs/service-design/01-*.md` §9 与设计/spec/proposal/README 的本轮修订）；仍按 hunk 切，**提交需用户明确指示**（本轮只确认口径，**未创建任何提交**。四个新桶的实测文件状态（`git status --short`）：⑦ 数据 012 = `backend/sql/migrations/012_article_online_readonly.sql` + 同名 `.rollback.sql`（两个 `??` 未跟踪新文件）+ `backend/sql/schema.sql`（`MM`：已暂存的是 011 那轮 hunk，本轮 012 的 hunk 还在工作区，只能再按 hunk 切）；⑧ 后端搬运与留痕 = `backend/src/routes/content.ts`（`MM`，本轮改动集中在 `articleDetailSql` 生成器替换别名字符串替换、`unpublish`/`publish` 的整行搬运、列表 `UNION ALL`、`assertDraftIdentity`、`auditArticle`、`GET /audit` 的 `entityUid` 过滤、删掉的死分支 `col === 'categoryId'` 与两处「跨两张表」注释）+ `backend/src/lib.ts`（` M`）；⑨ 前端形态 = `buinessweb/src/types/cms.ts`、`src/api/cms.ts`（两个 `MM`）+ `views/admin/content/article/{index,edit}.vue`（`AM`，且这两文件本身是 10.16 桶 ⑤「前端目录重组」的 `RM` 改名产物，改名与本轮形态属不同桶）+ `article/components/RichBodyEditor.vue`（整文件未跟踪，其 `editable` prop 属 ⑨ 而文件其余部分属 ⑥，需先 `git add -N` 再按 hunk 切）；⑩ 文档 = `docs/service-design/01-frontend-buinessweb-design.md`（`MM`）+ `openspec/changes/article-content-flow/`（整目录 `??`）。跨链内容仍按 10.16 的处置：`schema.sql`、`router/index.ts`、`public.ts`、`docs/*` 里属于 C1/C2 的 hunk 归各自 change 的提交，本链的四个提交只取本链 hunk）
 
+
+
+## 12. 登记未修：标识格式校验缺口（2026-11-02 核查挂起）
+
+> 本链 spec 第 9 行「标识格式要求与产品一致」，实现未跟上；产品链 `product-content-flow/tasks.md` 9.3 已登记这条不对称并声明「留给资讯链」。本链收尾时未补，需求方 2026-11-02 指示**暂不改动、仅登记**，故挂起待资讯链下一轮统一处理。
+>
+> **2026-11-02 后续：需求方确认改「标识由后端在保存时自动生成」（方案见 `docs/标识自动生成方案.md`），同日已按第 13 组落地。本组各项处置结论如下——4 项消解、1 项转为运营独立决策：**
+> - 12.1 / 12.2 / 12.4 → **消解**：不再有人工输入，格式问题无从产生（已随第 13 组核销）
+> - 12.3 → **已改写**：spec 里的三条标识场景换成生成侧场景，并新增独立 Requirement「标识一经生成即冻结，改名不影响官网地址」
+> - 12.5 → **转为运营独立决策**：存量不迁移是本方案的既定边界，`articles` id=7 的中文地址 `/article/大法师的` 继续有效；是否改写不由本链决定
+
+- [x] 12.1 `backend/src/routes/content.ts` 的 `draftCreateSchema.slug` 补 `.regex(/^[a-z0-9]+(-[a-z0-9]+)*$/, '标识只能由小写字母、数字与连字符组成')`（现只有 `min(1).max(100)`）——实测大写标识 `Bad-Slug` 当前被接受并入库，会产出 `/article/Bad-Slug`。**处置：由「后端自动生成标识」方案消解**（见 13.2，schema 里的 `slug` 字段已整体删除）
+- [x] 12.2 资讯分类段的 `slug: z.string()` 补长度与同款 regex，对齐产品分类的 `categorySlugSchema`。**处置：分类标识一并自动生成，消解**（见 13.4，`slug: z.string()` 与 `categorySlugSchema` 都已删除）
+- [x] 12.3 `specs/article-content-flow/spec.md` 补「Scenario: 标识格式非法」（产品 spec 有对应场景，本链缺，导致该要求不可验收）。**处置：改为「标识由服务端在保存时生成、不接受外部输入」，原场景失效删除**（见 13.5，格式非法场景不存在，改为「不接受外部提交的标识」）
+- [x] 12.4 `views/admin/content/article/edit.vue` 补标识就地格式提示（现只有必填校验，无格式提示）；改标识时的旧地址失效提示一并对齐产品侧。**处置：输入框原位改只读展示，消解**（见 13.6）
+- [x] 12.5 补齐前先查库：`articles` 与 `article_drafts` 两表是否已有不合格式的存量标识，**只报告不自动改写**（改标识即改官网地址，须运营确认）。**处置：已查——7 张表全量盘点，仅 `articles` id=7 的 slug 为 `大法师的`（纯中文、已上线）不合规，其余 6 表全合规；本链不迁移存量，该地址继续有效，是否改写由运营另行决定**
+
+## 13. 标识改由服务端生成并冻结（需求方 2026-11-02 确认，取代第 12 组的「补格式校验」口径与第 2/7 组的标识可改表述）
+
+> 触发点：`docs/标识自动生成方案.md` 评审后落地。规则定为 **B 不透明短码** `{前缀}-{6 位 [a-z0-9]}`，资讯用 `a`、资讯分类用 `ac-`；范围含分类表；存量行不迁移。与产品链共用生成器但**各自持有 spec 与文档，互不引用**。
+
+- [x] 13.1 后端单一生成器：`randomSlug` / `isSlugTaken` / `isContentSlugTaken` / `genSlug` 落在 [content.ts:138-173](../../../backend/src/routes/content.ts)；字符集 `[a-z0-9]`、固定 6 位尾缀、`node:crypto` 的 `randomInt` 均匀取样，重试上限 5 次后放手让 `INSERT` 去撞 `UNIQUE (slug)`（全局 23505 → 409），**不静默改名**
+- [x] 13.2 `POST /articles/drafts` 生成 `a-` 标识并写入 `slug` 列，响应新增 `slug`；`draftCreateSchema` 与 `DRAFT_FIELDS` 移除 `slug`——外部提交的标识被 zod 默认剥离，MUST NOT 影响落库值，也 MUST NOT 返回 400（方案 §4.1 的开放问题按「忽略」定稿）；标题必填文案改为「标题必填，且各字段长度受限」
+- [x] 13.3 `assertArticleSlugFree` **删除**（四处调用点随本轮全部消失，占用判定改由生成器承担）；发布/下线事务内的同标识复核（`slug_online` / `slug_draft` 两条 kind）保留——存量手工标识仍可能互相冲突，那是搬不动的历史事实
+- [x] 13.4 资讯分类：`slug: z.string()` 从 `articleCategorySchema` 删除、`POST /article-categories` 生成 `ac-` 标识并返回 `{id, slug}`、`PATCH` 可写列收窄为 `name/description/sort`。**顺带修掉同一段代码里的三个既有缺陷**（都不是本轮引入）：POST 用裸 `.parse()` 抛异常 → 500 而非 400；分类名/描述零长度校验；`PATCH` 在无任何可写字段时拼出 `SET  WHERE` → 500（补 `无更新字段` 400 守卫）
+- [x] 13.5 spec 同步：`specs/article-content-flow/spec.md` 的 Purpose 补「标识由服务端生成且冻结」；录入 Requirement 的字段清单去掉标识并补生成句；三条标识场景（标识重复被拒 / 与线上内容的标识冲突在保存时就被拒 / 已下线条目改标识要重新发布才生效）替换为生成侧三条；新增独立 Requirement「标识一经生成即冻结，改名不影响官网地址」（5 场景）；分类 Requirement 补生成与冻结句，`Scenario: 分类标识冲突` 换成生成/不改/筛选解析 3 场景
+- [x] 13.6 管理端资讯编辑页：标识从输入框改为**原位置的只读回显**（新建显示「保存后自动生成」，创建响应到达后填充），删除 `slugError`、必填与格式校验分支、409 就地提示；URL 区与「待生效地址」随标识不可改而撤除；提交体不含 slug
+- [x] 13.7 管理端资讯分类维护弹窗（方案 §4.2 遗漏项，本轮补入范围）：`article/categories.vue` 的标识输入框改为只读——新建显示「保存后自动生成」，编辑回显服务端已下发的原值；提交校验只剩「请填写名称」
+- [x] 13.8 前端类型与客户端：`ArticleDraftPayload` 去掉 `slug?`，`cmsAdmin.articleDrafts.create` 与 `articleCategories.create` 的返回类型补 `slug`
+- [x] 13.9 `design.md` D3 整体改写（含 5 条否决理由）、目标段与风险段的 `assertSlugFree` 表述订正、D-计数一节的标识分裂假设订正、对既有 change 修订清单里「标识格式」不对称标记为消解并登记 `pages.slug` 残留项、「已知缺口」一节标记为同日落地关闭；`proposal.md` 新增 BREAKING 行与 Impact/类型条目同步
+- [x] 13.10 交付文档回写：`docs/接口文档.md`（资讯创建响应补 `slug`、PATCH 不可写标识、409 文案口径、错误码 3002 语义；§4.3 原本既无字段表也无创建响应说明，两条都要新建）、`docs/数据结构文档.md`、`docs/后端执行文档.md`、`docs/前端执行文档.md`、`docs/service-design/01-frontend-buinessweb-design.md`、`docs/数据库执行文档.md`。**已完成（2026-11-03）**：六份 + `backend/sql/schema.sql` 的六处列注释全部回写；`docs/后端执行文档.md` 与 `docs/service-design/01-…` 里「写前跨表预检 / 8 与 13 个可编辑列」的旧口径改为「创建时生成 + 标识随行搬运、可编辑列 7 与 12」；`docs/前端执行文档.md` 撤掉「409 就地显示在标识字段下方」，改为错误原话直接提示 + 新增一条「标识前端不填、不改、不推导」
+- [x] 13.11 验证：backend `npx tsc --noEmit` 与 buinessweb `npx vue-tsc --noEmit -p tsconfig.vitest.json --composite false` 通过；`grep -rn "assertArticleSlugFree\|slugError" backend/src buinessweb/src` 零命中；`openspec validate --all --strict` 通过。**实测（2026-11-03）**：两端类型检查均 0 错误；`assertArticleSlugFree|slugError|SLUG_RE|FORMAT_HINT|savedSlug|categorySlugSchema|confirmSlugChange` 全库 `*.ts`/`*.vue` 零命中。**`openspec` CLI 本机仍不可用**（`command -v openspec` 为空、`node_modules/.bin` 里也没有），该条无法执行，不声称通过——改以结构化走查替代：本链两份 delta 共 17 个 Requirement，逐个含 SHALL/MUST 且至少一个 Scenario（脚本核对，与 README「校验状态」同口径）
+- [x] 13.12 端到端走查（方案 §6.8）：新建资讯 → 保存后标识自动生成并回填 → 改标题并保存 → 标识与官网地址不变 → 发布 → 详情按新标识可访问 → 下线 → 再上线 → 标识随行未变 → **`/article/大法师的` 这类存量老地址仍返回 200**；连续创建 20 条无标识重复；界面在原位置只有只读文本、无输入框。**实测（2026-11-03，经 `app.inject` 打真实路由与真实库，临时签发管理员令牌、未读任何凭据文件；走查行建完即删，两轮末尾按 `走查%` 计数确认残留 0 行）**：`POST /articles/drafts` 回传 `a-o1cdrs`（请求体夹带 `slug` 被丢弃）→ `PATCH` 带 `slug:'evil'` 改标题后标识不变 → 发布后 `/public/articles/a-o1cdrs` 200 → 下线搬回草稿表 `slug`/`uid` 未变 → 再上线同一标识 200；连建 20 条资讯标识 20/20 唯一；线上表全部 5 条存量行按原标识逐个访问均 200，其中含中文标识 `/article/大法师的`（未改写、未迁移）。审计按 `uid` 过滤回 5 条，`create` 记录的 `diff.to` 里有 `slug`。界面那一项是**静态核查**：编辑页与分类弹窗的标识位都是 `<span>` 只读、无 `v-model="…slug"` 输入框，`slugError`/`SLUG_RE`/`FORMAT_HINT` 零命中——未在浏览器里点过
+- [x] 13.13 分类筛选解析走查：新建资讯分类拿到 `ac-xxxxxx` 后，`/news?category=ac-xxxxxx` 命中该分类、`?category=对不上的值` 返回空列表而不是报错（`categoryCond` 非数字分支）。**实测（2026-11-03）**：新建分类得 `ac-43ypen`，把一条走查资讯挂上该分类并发布后 `/public/articles?category=ac-43ypen` 命中 1 条、与 `?category=<数字 id>` 的命中集合逐条相同、`?category=ac-zzzzzz` 返回 200 空列表不报错；分类 `PATCH` 只带 `slug` → 400「无更新字段」，改名成功且标识保持 `ac-43ypen`

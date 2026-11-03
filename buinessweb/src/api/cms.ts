@@ -137,7 +137,7 @@ export const cmsAdmin = {
   productDrafts: {
     get: (draftId: number) => unwrap<ProductEditable>(http.get(`/products/drafts/${draftId}`)),
     create: (body: ProductDraftPayload) =>
-      unwrap<{ id: number; uid: string; stripped_images: number }>(http.post('/products/drafts', body)),
+      unwrap<{ id: number; uid: string; slug: string; stripped_images: number }>(http.post('/products/drafts', body)),
     update: (draftId: number, uid: string, body: ProductDraftPayload) =>
       unwrap<{ stripped_images: number }>(http.patch(`/products/drafts/${draftId}`, { ...body, uid })),
     publish: (draftId: number, uid: string) =>
@@ -148,7 +148,7 @@ export const cmsAdmin = {
   },
   productCategories: {
     list: () => unwrap<ProductCategoryAdminRow[]>(http.get('/product-categories')),
-    create: (body: Record<string, any>) => unwrap<{ id: number }>(http.post('/product-categories', body)),
+    create: (body: Record<string, any>) => unwrap<{ id: number; slug: string }>(http.post('/product-categories', body)),
     update: (id: number, body: Record<string, any>) => unwrap(http.patch(`/product-categories/${id}`, body)),
     // 删除保护按两表并集计数：ref_count 非 0 时后端回 409 + 「已上架 X 个、未上架 Y 个」
     remove: (id: number) => unwrap(http.delete(`/product-categories/${id}`)),
@@ -169,7 +169,7 @@ export const cmsAdmin = {
   articleDrafts: {
     get: (draftId: number) => unwrap<ArticleEditable>(http.get(`/articles/drafts/${draftId}`)),
     create: (body: ArticleDraftPayload) =>
-      unwrap<{ id: number; uid: string; stripped_images: number }>(http.post('/articles/drafts', body)),
+      unwrap<{ id: number; uid: string; slug: string; stripped_images: number }>(http.post('/articles/drafts', body)),
     update: (draftId: number, uid: string, body: ArticleDraftPayload) =>
       unwrap<{ stripped_images: number }>(http.patch(`/articles/drafts/${draftId}`, { ...body, uid })),
     publish: (draftId: number, uid: string) =>
@@ -183,7 +183,7 @@ export const cmsAdmin = {
   },
   articleCategories: {
     list: () => unwrap<ArticleCategoryAdminRow[]>(http.get('/article-categories')),
-    create: (body: Record<string, any>) => unwrap<{ id: number }>(http.post('/article-categories', body)),
+    create: (body: Record<string, any>) => unwrap<{ id: number; slug: string }>(http.post('/article-categories', body)),
     update: (id: number, body: Record<string, any>) => unwrap(http.patch(`/article-categories/${id}`, body)),
     remove: (id: number) => unwrap(http.delete(`/article-categories/${id}`)),
   },
