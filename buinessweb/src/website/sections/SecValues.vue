@@ -20,6 +20,7 @@ const cls = computed(() => (props.p.items?.length === 4 ? 'values four' : 'value
           <p>{{ it.text }}</p>
         </div>
       </div>
+      <slot />
     </div>
   </section>
 </template>

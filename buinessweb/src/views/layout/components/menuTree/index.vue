@@ -105,13 +105,16 @@ const hasChildren = (item: MenuItem): boolean => {
 
 /**
  * 生成菜单项的 index 值
- * 规则：url 片段用 "-" 拼接，与 asyncRoutes.ts 中的路由 name 保持一致
+ * 规则：url 片段用 "-" 拼接，与路由 name 保持一致。
+ * 片段可含多段路径（如提升后的一级基准 '/admin/pages'），内部 '/' 一并归一为 '-'，
+ * 保证 '/admin/pages' + '/components' → 'admin-pages-components' 与路由 name 对齐。
  *
  * @example
  *   getMenuIndex('feiyong', 'two-one', 'organization') → 'feiyong-two-one-organization'
+ *   getMenuIndex('/admin/pages', 'components') → 'admin-pages-components'
  */
 const getMenuIndex = (...segments: string[]): string => {
-  return segments.map((s) => s.replace(/^\//, '')).join('-');
+  return segments.map((s) => s.replace(/^\//, '').replace(/\//g, '-')).join('-');
 };
 
 /**
@@ -683,7 +686,7 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
         </template>
       </el-menu>
     </el-scrollbar>
-    <div class="collapse-box">
+    <div class="collapse-box" :class="{ 'is-collapse': isCollapse }">
       <button
         type="button"
         class="expend-box"
@@ -728,6 +731,10 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
   flex-shrink: 0;
   height: calc(100vh - var(--zm-header-height) - 40px);
   width: var(--zm-el-aside-width);
+  /* 显式钉死宽度语义：website.css 的 *{box-sizing:border-box} 全局生效后，
+     若按 content-box 计算会把收起态的 88px 当内容宽度（渲染成 112px），
+     收起态菜单反而被裁成 40px 窄条；border-box 下 88px = 64px 菜单 + 左右 12px */
+  box-sizing: border-box;
   transition: width 0.5s;
   background: transparent;
   padding: 0 12px;
@@ -803,6 +810,11 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
   transition: width 0.5s;
 }
 
+/* 收起态（88px 列宽）按钮与图标列居中对齐：(88 - 28) / 2 = 30px */
+.collapse-box.is-collapse .expend-box {
+  right: 30px;
+}
+
 .expend-box {
   position: absolute;
   top: 50%;
@@ -821,7 +833,8 @@ const setCollectionConfirmListData = async (menuItem: MenuItem, status: boolean)
   border-radius: 6px;
   transition:
     color 0.2s,
-    border-color 0.2s;
+    border-color 0.2s,
+    right 0.5s;
 }
 
 .expend-box:hover {

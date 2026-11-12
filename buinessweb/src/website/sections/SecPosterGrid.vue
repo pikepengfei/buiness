@@ -4,6 +4,7 @@
  * 四宫格版式由 website.css 的 .poster-grid 固定。preview（编辑器内）不渲染链接。
  */
 import { computed } from 'vue';
+import { UiImage } from '@/components/ui';
 import SecHead from './SecHead.vue';
 
 const props = defineProps<{ p: Record<string, any>; preview?: boolean }>();
@@ -33,7 +34,7 @@ function tagOf(it: any) {
           v-bind="preview ? {} : isExternal(it.link) ? { href: it.link, target: '_blank', rel: 'noopener' } : { to: it.link || '/products' }"
           class="poster"
         >
-          <img :src="it.image" :alt="it.caption || tagOf(it)" />
+          <UiImage :src="it.image" :alt="it.caption || tagOf(it)" />
           <span v-if="it.tag" class="poster-tag">{{ tagOf(it) }}</span>
           <div v-if="it.caption" class="poster-cap">{{ it.caption }}</div>
         </component>

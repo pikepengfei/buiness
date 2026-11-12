@@ -176,7 +176,7 @@ function fmt(v: string | null | undefined) {
         <template #default="{ row }">{{ fmt(row.updated_at) }}</template>
       </el-table-column>
       <el-table-column prop="view_count" label="浏览" width="72" align="center" />
-      <el-table-column label="操作" width="210" align="right" fixed="right">
+      <el-table-column label="操作" class-name="ops-col" width="260" align="right" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="goEdit(row)">{{ row.origin === 'online' ? '查看' : (canWrite ? '编辑' : '查看') }}</el-button>
           <el-button v-if="canWrite && row.origin === 'draft'" link type="success" @click="publish(row)">发布</el-button>
@@ -225,5 +225,16 @@ function fmt(v: string | null | undefined) {
   border-radius: 4px;
   background: #f5f7fa;
   display: block;
+}
+/* 操作列按钮一行横向平铺，不换行 */
+:deep(td.ops-col .cell) {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+:deep(td.ops-col .el-button + .el-button) {
+  margin-left: 0;
 }
 </style>

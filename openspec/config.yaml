@@ -9,8 +9,8 @@ context: |
   - buinessweb/：Vue 3 <script setup> + TypeScript + Element Plus + Pinia + vue-router（Vite，dev :5190 代理 /api 与 /uploads）。
     同一份代码承载两类界面：官网前台 src/views/website + src/layout/WebsiteLayout.vue + src/website/sections/*（装修区块组件）；
     运营后台 src/views/admin/**。API 客户端 src/api/cms.ts（cms / cmsAdmin 两组）。
-  - 内容模型：pages.slug 的 content_json/draft_json 存 {blocks:[{id,type,visible,props}]}，
-    区块类型注册表 src/website/sectionRegistry.ts（type → component/defaultProps/formSchema），与后端种子 JSON 结构必须两侧同步；
+  - 内容模型：pages.slug 的 content_json/draft_json 存 {blocks:[{id,type,visible,props,children?}]}（区块结构版本 2：children 是模块装载的基础元素子树，深度 ≤4、单页节点 ≤400、单模块子内容 ≤50，上限值前端 `src/website/blocks.ts` 与后端 `src/blocks.ts` 两侧同值需同步），
+    区块类型注册表 src/website/sectionRegistry.ts（type → component/defaultProps/formSchema + layer:module|atom + band + accepts），与后端种子 JSON 结构必须两侧同步；
     导航菜单 menus.location ∈ header|footer|cta。
   - 存储：STORAGE_DRIVER=local（/uploads 由后端静态服务），无 Redis、无 CDN、后端不托管 SPA。
   - 权限：RBAC 为权限点字符串数组（content:read/content:write/media:write/lead:*/... 与 * 通配），前端 hasPermission 判定。

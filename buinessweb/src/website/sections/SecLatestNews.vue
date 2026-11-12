@@ -4,14 +4,21 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { cms } from '@/api/cms';
 import type { ArticleSummary } from '@/types/cms';
+import { DEMO_ARTICLES } from '@/website/libraryDemoData';
 import SecHead from './SecHead.vue';
 
-const props = defineProps<{ p: Record<string, any> }>();
+const props = defineProps<{ p: Record<string, any>; demo?: boolean }>();
 const router = useRouter();
 const items = ref<ArticleSummary[]>([]);
 const loading = ref(true);
 
 onMounted(async () => {
+  // 组件库预览：用内置样例渲染，不发内容请求（预览舞台屏蔽交互，点击不会跳转）
+  if (props.demo) {
+    items.value = DEMO_ARTICLES.slice(0, Number(props.p.limit) || 3);
+    loading.value = false;
+    return;
+  }
   try {
     const res: any = await cms.getArticlesPaged({ page: 1, pageSize: Number(props.p.limit) || 3 });
     items.value = res && res.code === 0 && Array.isArray(res.data) ? res.data : [];

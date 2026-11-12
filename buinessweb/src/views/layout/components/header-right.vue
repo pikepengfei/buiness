@@ -65,7 +65,10 @@ async function handleClickExit(): Promise<void> {
 
 <template>
   <div class="header-right">
-    <span class="company-label">{{ companyName }}</span>
+    <a class="site-link" href="/" target="_blank" rel="noopener" title="在新标签页打开官网">
+      <el-icon class="site-link-icon"><View /></el-icon>
+      <span>查看官网</span>
+    </a>
     <span class="branching"></span>
 
     <el-popover placement="bottom" :width="220" trigger="hover">
@@ -73,7 +76,6 @@ async function handleClickExit(): Promise<void> {
         <div class="user-box">
           <el-avatar :size="34" class="user-avatar">{{ avatarText }}</el-avatar>
           <span class="user-name">{{ userName }}</span>
-          <span class="user-role">{{ roleLabel }}</span>
         </div>
       </template>
       <div class="content-wrap">
@@ -110,13 +112,21 @@ async function handleClickExit(): Promise<void> {
   align-items: center;
   flex-shrink: 0;
 }
-.company-label {
+.site-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 14px;
   color: #606266;
+  text-decoration: none;
   white-space: nowrap;
-  max-width: 220px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  transition: color 0.2s;
+}
+.site-link:hover {
+  color: #de6420;
+}
+.site-link-icon {
+  font-size: 16px;
 }
 .user-box {
   display: flex;
@@ -133,15 +143,6 @@ async function handleClickExit(): Promise<void> {
   margin-left: 10px;
   font-size: 16px;
   line-height: 22px;
-}
-.user-role {
-  margin-left: 8px;
-  font-size: 12px;
-  color: #98a4b2;
-  background: #f3f6fc;
-  padding: 2px 8px;
-  border-radius: 10px;
-  white-space: nowrap;
 }
 .branching {
   display: block;

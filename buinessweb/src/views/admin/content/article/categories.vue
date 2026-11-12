@@ -123,7 +123,7 @@ async function move(index: number, dir: -1 | 1) {
           <el-button link type="primary" :disabled="$index === rows.length - 1" @click="move($index, 1)">↓</el-button>
         </template>
       </el-table-column>
-      <el-table-column v-if="canWrite" label="操作" width="150" align="right" fixed="right">
+      <el-table-column v-if="canWrite" label="操作" class-name="ops-col" width="200" align="right" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link type="danger" @click="remove(row)">删除</el-button>
@@ -167,5 +167,16 @@ async function move(index: number, dir: -1 | 1) {
 .cat-slug {
   font-size: 13px;
   color: #606266;
+}
+/* 操作列按钮一行横向平铺，不换行 */
+:deep(td.ops-col .cell) {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+:deep(td.ops-col .el-button + .el-button) {
+  margin-left: 0;
 }
 </style>

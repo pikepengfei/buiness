@@ -30,6 +30,10 @@ import SecFaqList from './sections/SecFaqList.vue';
 import SecContactForm from './sections/SecContactForm.vue';
 import SecCtaBanner from './sections/SecCtaBanner.vue';
 import SecRichText from './sections/SecRichText.vue';
+import UiText from '@/components/ui/UiText.vue';
+import UiHeading from '@/components/ui/UiHeading.vue';
+import UiImage from '@/components/ui/UiImage.vue';
+import UiButton from '@/components/ui/UiButton.vue';
 
 export type FieldKind =
   | 'text' | 'textarea' | 'html' | 'number' | 'image' | 'select'
@@ -46,12 +50,30 @@ export interface FieldSchema {
   tip?: string;                // 表单提示文案
 }
 
+/** 组件库层级：module = 整页模块（对应一段背景带）；atom = 文字/图片/按钮等基础元素，只能被模块装载 */
+export type BlockLayer = 'module' | 'atom';
+
+/**
+ * 模块的背景带：模块边界以「背景色来源」为准（相邻模块底色不同即为一段）
+ * - form：bleed = section 自身通栏底色；card = 通栏内的卡片底色（卡片自带边框，与相邻段仍可见分界）
+ * - source：fixed = 组件根类名写死；themeable = 随 props.theme 在 paper / 默认白之间切换；
+ *   省略 source 且无 band 表示背景未指定，编辑器据此提示
+ */
+export interface BandInfo {
+  form: 'bleed' | 'card';
+  color: string;
+  source?: 'fixed' | 'themeable';
+}
+
 export interface SectionMeta {
   label: string;               // 中文名（区块库/列表展示）
   group: string;               // 区块库分组
   component: Component;
   defaultProps: () => Record<string, any>;
   formSchema: FieldSchema[];
+  layer?: BlockLayer;          // 缺省为 module
+  band?: BandInfo;             // 模块的背景带；缺省表示背景未指定
+  accepts?: BlockLayer[];      // 可装载的子内容层级；缺省按是否数据驱动推导
 }
 
 /** 通用「区块标题头」字段（eyebrow + 多行 title + desc），各区块复用 */
@@ -76,11 +98,17 @@ const THEME_OPTIONS = [
 ];
 const ICON_OPTIONS = SECTION_ICON_KEYS.map((k) => ({ label: k, value: k }));
 
+/** 组件库中基础元素层的分组名（数据源仍是本注册表的 layer 字段） */
+export const ATOM_GROUP = '基础元素';
+
 export const SECTION_REGISTRY: Record<string, SectionMeta> = {
   hero: {
     label: '首页首屏 Hero',
     group: '头部与首屏',
     component: markRaw(SecHero),
+    layer: 'module',
+    band: { form: 'bleed', color: 'var(--paper)', source: 'fixed' },
+    accepts: ['atom'],
     defaultProps: () => ({
       eyebrow: '', title: [''], lede: '',
       cta1: { text: '', link: '/products' }, cta2: { text: '', link: '/about' },
@@ -129,6 +157,10 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: '品牌/公司介绍三栏',
     group: '图文内容',
     component: markRaw(SecIntroEco),
+    layer: 'module',
+    // 组件支持 theme，但默认内容与表单都未开放该开关，实际呈现为默认白底
+    band: { form: 'bleed', color: 'var(--white)', source: 'themeable' },
+    accepts: ['atom'],
     defaultProps: () => ({ eyebrow: '', title: [''], desc: '', items: [{ h4: '', p: '' }] }),
     formSchema: [
       ...headFields(),
@@ -142,6 +174,9 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: '使命与愿景',
     group: '图文内容',
     component: markRaw(SecMvv),
+    layer: 'module',
+    band: { form: 'bleed', color: 'var(--paper)', source: 'themeable' },
+    accepts: ['atom'],
     defaultProps: () => ({ eyebrow: '', title: [''], desc: '', theme: '', cards: [{ tag: '', text: '' }] }),
     formSchema: [
       ...headFields(),
@@ -156,6 +191,10 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: '品牌价值观',
     group: '图文内容',
     component: markRaw(SecValues),
+    layer: 'module',
+    // 同 intro-eco：组件支持 theme，默认按白底呈现
+    band: { form: 'bleed', color: 'var(--white)', source: 'themeable' },
+    accepts: ['atom'],
     defaultProps: () => ({ eyebrow: '', title: [''], desc: '', items: [{ icon: 'user', title: '', en: '', text: '' }] }),
     formSchema: [
       ...headFields(),
@@ -186,6 +225,9 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: '深色品牌背景区（含品牌墙）',
     group: '图文内容',
     component: markRaw(SecStory),
+    layer: 'module',
+    band: { form: 'bleed', color: 'var(--ink-950)', source: 'fixed' },
+    accepts: ['atom'],
     defaultProps: () => ({
       eyebrow: '', title: [''], paras: [''], pillars: [], image: '', imageAlt: '',
       backers: [{ title: '', desc: '' }], brandWall: [],
@@ -269,6 +311,10 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: '精选产品（API 驱动）',
     group: '数据驱动',
     component: markRaw(SecFeatureProducts),
+    layer: 'module',
+    band: { form: 'bleed', color: 'var(--paper)', source: 'themeable' },
+    // 列表来自公开接口，手工子内容会与之竞争同一版式位
+    accepts: [],
     defaultProps: () => ({ eyebrow: '', title: [''], desc: '', theme: '', limit: 3, moreText: '查看全部产品 →', moreLink: '/products' }),
     formSchema: [
       ...headFields({ withMore: true }),
@@ -280,6 +326,10 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: '最新资讯（API 驱动）',
     group: '数据驱动',
     component: markRaw(SecLatestNews),
+    layer: 'module',
+    band: { form: 'bleed', color: 'var(--paper)', source: 'themeable' },
+    // 列表来自公开接口，不接受手工子内容
+    accepts: [],
     defaultProps: () => ({ eyebrow: '', title: [''], desc: '', theme: '', limit: 3, moreText: '查看全部资讯 →', moreLink: '/news' }),
     formSchema: [
       ...headFields({ withMore: true }),
@@ -313,6 +363,10 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: '产品矩阵入口（大字横幅）',
     group: '数据驱动',
     component: markRaw(SecPmEntry),
+    layer: 'module',
+    // 底色落在 .pm-entry 卡片上（自带 1px --ink-100 描边），与相邻通栏段可见分界
+    band: { form: 'card', color: 'var(--ink-50)', source: 'fixed' },
+    accepts: ['atom'],
     defaultProps: () => ({ word: 'PRODUCTS', num: '00', title: '', sub: '', desc: '', btnText: '进入产品中心 →', btnLink: '/products' }),
     formSchema: [
       { key: 'word', label: '背景大字', kind: 'text' },
@@ -362,6 +416,9 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
     label: 'CTA 横幅',
     group: '转化组件',
     component: markRaw(SecCtaBanner),
+    layer: 'module',
+    band: { form: 'card', color: 'var(--ink-950)', source: 'fixed' },
+    accepts: ['atom'],
     defaultProps: () => ({ title: '', desc: '', btnText: '联系我们 →', btnLink: '/contact' }),
     formSchema: [
       { key: 'title', label: '主文案', kind: 'text' },
@@ -381,10 +438,139 @@ export const SECTION_REGISTRY: Record<string, SectionMeta> = {
       { key: 'html', label: '正文 HTML', kind: 'html', tip: '保存时后端自动清洗不安全标签' },
     ],
   },
+  // ——— 基础元素层：与 src/components/ui 同一份实现，只能作为模块的子内容插入 ———
+  'ui-text': {
+    label: '文字',
+    group: ATOM_GROUP,
+    component: markRaw(UiText),
+    layer: 'atom',
+    accepts: [],
+    defaultProps: () => ({ text: '', html: '', tone: 'body', size: 'md' }),
+    formSchema: [
+      { key: 'text', label: '文字内容', kind: 'textarea', tip: '纯文本，标签会被转义' },
+      { key: 'html', label: '富文本（选填）', kind: 'html', tip: '填写后以富文本为准；保存时后端清洗' },
+      { key: 'tone', label: '色阶', kind: 'select', options: [
+        { label: '正文', value: 'body' }, { label: '次级', value: 'muted' }, { label: '反白', value: 'invert' },
+      ] },
+      { key: 'size', label: '字号', kind: 'select', options: [
+        { label: '小', value: 'sm' }, { label: '中', value: 'md' }, { label: '大', value: 'lg' },
+      ] },
+    ],
+  },
+  'ui-heading': {
+    label: '标题组',
+    group: ATOM_GROUP,
+    component: markRaw(UiHeading),
+    layer: 'atom',
+    accepts: [],
+    defaultProps: () => ({ eyebrow: '', title: [''], desc: '', moreText: '', moreLink: '' }),
+    formSchema: [
+      { key: 'eyebrow', label: '眉标', kind: 'text' },
+      { key: 'title', label: '主标题（行）', kind: 'lines', tip: '每行一条；可用 <em> 高亮' },
+      { key: 'desc', label: '描述文案', kind: 'textarea' },
+      { key: 'moreText', label: '「更多」链接文字', kind: 'text' },
+      { key: 'moreLink', label: '「更多」链接地址', kind: 'text', placeholder: '如：/products' },
+    ],
+  },
+  'ui-image': {
+    label: '图片',
+    group: ATOM_GROUP,
+    component: markRaw(UiImage),
+    layer: 'atom',
+    accepts: [],
+    defaultProps: () => ({ src: '', alt: '', ratio: 0, fit: 'cover', radius: 0 }),
+    formSchema: [
+      { key: 'src', label: '图片地址', kind: 'image' },
+      { key: 'alt', label: '替代文字', kind: 'text' },
+      { key: 'ratio', label: '宽高比（0 = 不设）', kind: 'number', tip: '填 1.777 表示 16:9' },
+      { key: 'fit', label: '填充方式', kind: 'select', options: [
+        { label: '裁切铺满', value: 'cover' }, { label: '完整显示', value: 'contain' }, { label: '拉伸', value: 'fill' },
+      ] },
+      { key: 'radius', label: '圆角 px（0 = 直角）', kind: 'number' },
+    ],
+  },
+  'ui-button': {
+    label: '按钮',
+    group: ATOM_GROUP,
+    component: markRaw(UiButton),
+    layer: 'atom',
+    accepts: [],
+    defaultProps: () => ({ text: '查看详情', to: '/products', variant: 'solid' }),
+    formSchema: [
+      { key: 'text', label: '按钮文字', kind: 'text' },
+      { key: 'to', label: '跳转地址', kind: 'text', tip: '站内路径 / 锚点 / mailto: / tel:' },
+      { key: 'variant', label: '按钮形态', kind: 'select', options: [
+        { label: '实心（主）', value: 'solid' }, { label: '描边（浅底）', value: 'ghost' }, { label: '反白（深底）', value: 'ghost-light' },
+      ] },
+    ],
+  },
 };
 
 /** 区块库分组清单（管理端「新增区块」面板用） */
 export const SECTION_GROUPS: string[] = ['头部与首屏', '图文内容', '数据驱动', '转化组件'];
+
+/**
+ * 首页九模块（D1）：顺序即官网自上而下的背景带顺序，与 pageDefaults.home 一一对应
+ * 第 7 段 pm-entry 与第 9 段 cta-banner 的底色落在卡片上（form: 'card'），
+ * 卡片自带 1px --ink-100 描边，因此与相邻通栏段之间本就有可见分界。
+ */
+export const HOME_MODULE_TYPES: string[] = [
+  'hero', 'intro-eco', 'mvv', 'values', 'feature-products',
+  'story', 'pm-entry', 'latest-news', 'cta-banner'
+];
+
+/** 列表内容来自公开接口的模块：不接受手工子内容（spec「插入到不允许的位置」） */
+export const DATA_DRIVEN_TYPES = ['feature-products', 'latest-news', 'product-grid', 'news-feed', 'faq-list'];
+
+export const REASON_DATA_DRIVEN = '该模块内容由数据接口驱动，不支持手工子内容';
+export const REASON_TYPE_RETIRED = '该类型已下线，无法插入，建议删除此项';
+export const REASON_SLOT_NOT_OPEN = '该模块首期未开放子内容位，当前只有首页模块可装载基础元素';
+
+/** 组件库层级（未注册类型按 module 处理，由调用方先行判存在性） */
+export function blockLayer(type: string): BlockLayer {
+  return SECTION_REGISTRY[type]?.layer ?? 'module';
+}
+
+/**
+ * 基础元素只接收注册表声明过的字段，避免多余 props 落到 DOM 属性上。
+ * preview（编辑态）以组件自身是否声明该 prop 为准追加，注册表不再维护第二份清单；
+ * 缺了它就等于把「图片未选择」「跳转地址不合法」两类编辑态提示丢在编辑器外面。
+ */
+export function atomBindProps(
+  type: string,
+  raw: Record<string, any> | undefined,
+  preview?: boolean
+): Record<string, any> {
+  const meta = SECTION_REGISTRY[type];
+  if (!meta) return {};
+  const allowed = new Set(meta.formSchema.map((f) => f.key));
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const binds: Record<string, any> = Object.fromEntries(Object.entries(src).filter(([key]) => allowed.has(key)));
+  const declared = (meta.component as { props?: Record<string, unknown> }).props;
+  if (preview && declared && 'preview' in declared) binds.preview = true;
+  return binds;
+}
+
+/**
+ * 某类型可装载的子内容层级
+ * 只有显式声明 accepts 且组件版式里预留了子内容位（`<slot />`）的模块才放行；
+ * 首期开放首页九模块中除两段数据驱动外的 7 个（hero / intro-eco / mvv / values / story / pm-entry / cta-banner）。
+ */
+export function blockAccepts(type: string): BlockLayer[] {
+  return SECTION_REGISTRY[type]?.accepts ?? [];
+}
+
+/** 该类型能否装载目标层级的子内容 */
+export function canAccept(type: string, childLayer: BlockLayer): boolean {
+  return blockAccepts(type).includes(childLayer);
+}
+
+/** 不可用原因；返回 undefined 表示可插入 */
+export function insertRejectReason(type: string, childLayer: BlockLayer): string | undefined {
+  if (!SECTION_REGISTRY[type]) return REASON_TYPE_RETIRED;
+  if (canAccept(type, childLayer)) return undefined;
+  return DATA_DRIVEN_TYPES.includes(type) ? REASON_DATA_DRIVEN : REASON_SLOT_NOT_OPEN;
+}
 
 export function sectionLabel(type: string): string {
   return SECTION_REGISTRY[type]?.label || type;

@@ -4,14 +4,22 @@ import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { cms } from '@/api/cms';
 import type { ProductSummary } from '@/types/cms';
+import { DEMO_PRODUCTS } from '@/website/libraryDemoData';
+import { UiImage } from '@/components/ui';
 import SecHead from './SecHead.vue';
 
-const props = defineProps<{ p: Record<string, any> }>();
+const props = defineProps<{ p: Record<string, any>; demo?: boolean }>();
 const router = useRouter();
 const items = ref<ProductSummary[]>([]);
 const loading = ref(true);
 
 onMounted(async () => {
+  // 组件库预览：用内置样例渲染，不发内容请求（预览舞台屏蔽交互，点击不会跳转）
+  if (props.demo) {
+    items.value = DEMO_PRODUCTS.slice(0, Number(props.p.limit) || 3);
+    loading.value = false;
+    return;
+  }
   try {
     const res: any = await cms.getProductsPaged({ page: 1, pageSize: Number(props.p.limit) || 3 });
     items.value = res && res.code === 0 && Array.isArray(res.data) ? res.data : [];
@@ -32,7 +40,7 @@ onMounted(async () => {
       <div v-else class="product-grid">
         <article v-for="it in items" :key="it.id" class="product" @click="router.push(`/product/${it.slug}`)">
           <div class="product-img">
-            <img v-if="it.cover_image" :src="it.cover_image" :alt="it.name" loading="lazy" />
+            <UiImage v-if="it.cover_image" :src="it.cover_image" :alt="it.name" lazy />
           </div>
           <div class="product-body">
             <span v-if="it.category" class="product-cat">{{ it.category }}</span>

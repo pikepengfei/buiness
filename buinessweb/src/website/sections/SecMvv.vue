@@ -15,6 +15,7 @@ defineProps<{ p: Record<string, any> }>();
           <p>{{ c.text }}</p>
         </div>
       </div>
+      <slot />
     </div>
   </section>
 </template>

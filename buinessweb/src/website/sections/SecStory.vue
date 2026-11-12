@@ -1,5 +1,6 @@
 <script setup lang="ts">
 // 深色品牌背景区块：段落 + 数据支柱 + 配图 + 背书卡（可选）+ 品牌墙（可选）
+import { UiImage } from '@/components/ui';
 import SecHead from './SecHead.vue';
 
 defineProps<{ p: Record<string, any> }>();
@@ -22,7 +23,7 @@ defineProps<{ p: Record<string, any> }>();
             </div>
           </div>
           <div class="story-img" v-if="p.image">
-            <img :src="p.image" :alt="p.imageAlt || 'Centremix'" />
+            <UiImage :src="p.image" :alt="p.imageAlt || 'Centremix'" />
           </div>
         </div>
         <div class="backer" v-for="(bk, i) in p.backers || []" :key="'b' + i" :style="i ? 'margin-top: 18px' : undefined">
@@ -56,6 +57,7 @@ defineProps<{ p: Record<string, any> }>();
           </template>
         </div>
       </div>
+      <slot />
     </div>
   </section>
 </template>

@@ -9,9 +9,11 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { cms } from '@/api/cms';
 import type { ProductCategory, ProductSummary } from '@/types/cms';
+import { DEMO_PRODUCTS, DEMO_PRODUCT_CATEGORIES } from '@/website/libraryDemoData';
+import { UiButton, UiImage } from '@/components/ui';
 import SecHead from './SecHead.vue';
 
-const props = defineProps<{ p: Record<string, any>; preview?: boolean }>();
+const props = defineProps<{ p: Record<string, any>; preview?: boolean; demo?: boolean }>();
 const route = useRoute();
 const router = useRouter();
 
@@ -36,6 +38,13 @@ const pageList = computed(() => {
 });
 
 async function load() {
+  // 组件库预览：内置样例直接填列表，不发内容请求（分类同理在 onMounted 里给样例）
+  if (props.demo) {
+    products.value = DEMO_PRODUCTS.slice(0, pageSize.value);
+    total.value = products.value.length;
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   failed.value = false;
   try {
@@ -106,6 +115,11 @@ function openProduct(slug: string) {
 }
 
 onMounted(async () => {
+  if (props.demo) {
+    categories.value = DEMO_PRODUCT_CATEGORIES;
+    await load();
+    return;
+  }
   // 从地址栏恢复筛选与页码：直接打开分享链接得到与原访问者相同的结果
   if (!props.preview) {
     const q = route.query;
@@ -142,7 +156,7 @@ onMounted(async () => {
       <div class="prod-tools">
         <div class="search-box">
           <input v-model="keyword" type="text" placeholder="搜索产品名称 / 关键词…" @keyup.enter="onSearch" />
-          <button class="btn btn-primary" @click="onSearch">搜索</button>
+          <UiButton text="搜索" @click="onSearch" />
         </div>
         <select v-model="sort" class="sort-select" @change="onSearch">
           <option value="">默认排序</option>
@@ -154,13 +168,13 @@ onMounted(async () => {
       <div v-if="loading" class="sec-loading">加载中…</div>
       <div v-else-if="failed" class="sec-empty">
         <p>产品列表加载失败，请稍后重试。</p>
-        <button class="btn btn-primary" @click="load">重新加载</button>
+        <UiButton text="重新加载" @click="load" />
       </div>
       <div v-else-if="products.length === 0" class="sec-empty">没有找到相关产品，换个关键词或分类试试～</div>
       <div v-else class="product-grid">
         <article v-for="pt in products" :key="pt.id" class="product" @click="openProduct(pt.slug)">
           <div class="product-img">
-            <img v-if="pt.cover_image" :src="pt.cover_image" :alt="pt.name" loading="lazy" />
+            <UiImage v-if="pt.cover_image" :src="pt.cover_image" :alt="pt.name" lazy />
           </div>
           <div class="product-body">
             <span v-if="pt.category" class="product-cat">{{ pt.category }}</span>

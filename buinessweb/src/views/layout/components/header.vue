@@ -71,9 +71,10 @@ const menuListAfter = computed(() => {
  * 根据容器宽度和菜单项宽度动态计算
  */
 const getMenuNumber = function (): void {
-  const clientWidth = document.querySelector('.el-menu')?.clientWidth as unknown as number;
-  menuNumber.value = Number.parseInt(String((clientWidth - 104 - 76) / 126)) - 1;
-  if (menuNumber.value <= 0) {
+  const clientWidth = document.querySelector('.app-header .el-menu')?.clientWidth ?? 0;
+  // 一级菜单每项约 108px，预留「更多」按钮约 100px；宽度足以容纳全部 6 项时不再显示「更多」
+  menuNumber.value = Math.floor((clientWidth - 100) / 108);
+  if (menuNumber.value < 0) {
     menuNumber.value = 0;
   }
 };
@@ -131,7 +132,7 @@ onUnmounted(() => {
     mode="horizontal"
     @select="handleSelect"
   >
-    <!-- 管理菜单在前 -->
+    <!-- 一级管理菜单（6 项）；「查看官网」已移至右上角小入口，不再作为一级 tab -->
     <template v-for="menuItem in menuListFront" :key="menuItem.id">
       <el-menu-item
         :index="menuItem.url"
@@ -144,17 +145,11 @@ onUnmounted(() => {
         </div>
       </el-menu-item>
     </template>
-    <!-- 查看官网在后 -->
-    <el-menu-item index="/" class="li-menu-item" :route="getRoute('/')" @click="handleClick('/')">
-      <div class="menu-item">
-        <span class="menu-item-span">查看官网</span>
-      </div>
-    </el-menu-item>
     <template v-if="menuListAfter.length > 0">
       <el-sub-menu :index="menuListAfter[0]?.url" :teleported="false">
         <template #title>
           <div class="menu-item">
-            <span class="menu-item-span">...更多</span>
+            <span class="menu-item-span">更多</span>
           </div>
         </template>
         <template v-for="menuItem in menuListAfter" :key="menuItem.id">
@@ -256,7 +251,6 @@ onUnmounted(() => {
   justify-content: center;
 }
 .menu-item-span {
-  margin-left: 10px;
   font-size: 16px;
   line-height: 16px;
   letter-spacing: 1px;
@@ -270,7 +264,7 @@ onUnmounted(() => {
 ::v-deep(.el-sub-menu__title) {
   border-bottom: none !important;
   padding-left: 0;
-  padding-right: 20px;
+  padding-right: 12px;
   border-radius: 8px;
 }
 
@@ -322,5 +316,16 @@ onUnmounted(() => {
   font-size: 16px;
   color: #fff;
   opacity: var(--zm-nav-opacity);
+}
+
+/* 窄屏隐藏「管理后台」副标，把横向空间让给一级菜单与「更多」按钮 */
+@media (max-width: 1100px) {
+  .brand-tag {
+    display: none;
+  }
+  .el-menu {
+    margin-left: 16px;
+    margin-right: 10px;
+  }
 }
 </style>

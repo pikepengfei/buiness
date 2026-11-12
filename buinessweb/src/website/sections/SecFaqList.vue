@@ -3,13 +3,20 @@
 import { onMounted, ref } from 'vue';
 import { cms } from '@/api/cms';
 import type { Faq } from '@/types/cms';
+import { DEMO_FAQS } from '@/website/libraryDemoData';
 import SecHead from './SecHead.vue';
 
-const props = defineProps<{ p: Record<string, any> }>();
+const props = defineProps<{ p: Record<string, any>; demo?: boolean }>();
 const faqs = ref<Faq[]>([]);
 const loading = ref(true);
 
 onMounted(async () => {
+  // 组件库预览：用内置样例渲染，不发内容请求
+  if (props.demo) {
+    faqs.value = DEMO_FAQS;
+    loading.value = false;
+    return;
+  }
   try {
     faqs.value = await cms.getFaqs(props.p.category || undefined).catch(() => []);
   } catch {

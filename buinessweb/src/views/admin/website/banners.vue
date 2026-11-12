@@ -139,7 +139,7 @@ function picked(url: string) {
           <el-tag :type="row.status === 1 ? 'success' : 'info'" size="small">{{ row.status === 1 ? '启用' : '停用' }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" align="right" fixed="right">
+      <el-table-column label="操作" class-name="ops-col" width="240" align="right" fixed="right">
         <template #default="{ row }">
           <el-button link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button link @click="toggleStatus(row)">{{ row.status === 1 ? '停用' : '启用' }}</el-button>
@@ -211,5 +211,16 @@ function picked(url: string) {
   margin-top: 8px;
   max-width: 100%;
   border-radius: 6px;
+}
+/* 操作列按钮一行横向平铺，不换行 */
+:deep(td.ops-col .cell) {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+:deep(td.ops-col .el-button + .el-button) {
+  margin-left: 0;
 }
 </style>

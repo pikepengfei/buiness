@@ -138,13 +138,31 @@ CREATE TABLE pages (
   hero_image      TEXT,
   status          SMALLINT     NOT NULL DEFAULT 1,   -- 1=已发布 0=草稿
   published_at    TIMESTAMPTZ,
-  content_json    JSONB        NOT NULL DEFAULT '{}'::jsonb, -- 线上正式内容：{ blocks:[{id,type,visible,props}] }（见 migrations/002_page_blocks.sql）
+  content_json    JSONB        NOT NULL DEFAULT '{}'::jsonb, -- 线上正式内容：{ blocks:[{id,type,visible,props,children?}] }，children 为模块装载的子节点（见 migrations/002_page_blocks.sql 与 013_home_module_seed.sql）
   draft_json      JSONB        NOT NULL DEFAULT '{}'::jsonb, -- 管理端草稿内容，发布时覆盖 content_json
+  -- 区块结构版本；与 migrations/005_pages_schema_version.sql 同口径，前端按此做读取时向前迁移
+  schema_version  INTEGER      NOT NULL DEFAULT 1,
   created_by      BIGINT REFERENCES users(id) ON DELETE SET NULL,
   created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
 CREATE TRIGGER trg_pages_updated_at BEFORE UPDATE ON pages
+  FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+COMMENT ON COLUMN pages.schema_version IS '区块结构版本；前端 parseBlocks 按此做向前兼容迁移（当前版本 2：children 装载基础元素）';
+
+-- 3.1.1 区块模板（装修编辑器存为模板的区块 props 快照；见 migrations/014_block_templates.sql） --
+CREATE TABLE block_templates (
+  id          BIGSERIAL PRIMARY KEY,
+  name        VARCHAR(80) NOT NULL,
+  type        VARCHAR(40) NOT NULL,
+  props       JSONB       NOT NULL DEFAULT '{}'::jsonb,
+  created_by  BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT block_templates_name_type_key UNIQUE (name, type)
+);
+CREATE INDEX block_templates_type_created_idx ON block_templates (type, created_at DESC);
+CREATE TRIGGER trg_block_templates_updated_at BEFORE UPDATE ON block_templates
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- 3.2 资讯分类 ---------------------------------------------------------------

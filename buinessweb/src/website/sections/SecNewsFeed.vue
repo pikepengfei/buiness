@@ -8,9 +8,11 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { cms } from '@/api/cms';
 import type { ArticleCategory, ArticleSummary } from '@/types/cms';
+import { DEMO_ARTICLES, DEMO_ARTICLE_CATEGORIES } from '@/website/libraryDemoData';
+import { UiButton } from '@/components/ui';
 import SecHead from './SecHead.vue';
 
-const props = defineProps<{ p: Record<string, any>; preview?: boolean }>();
+const props = defineProps<{ p: Record<string, any>; preview?: boolean; demo?: boolean }>();
 const route = useRoute();
 const router = useRouter();
 
@@ -39,6 +41,13 @@ function fmtDate(s: string): string {
 }
 
 async function load() {
+  // 组件库预览：内置样例直接填列表，不发内容请求（分类同理在 onMounted 里给样例）
+  if (props.demo) {
+    articles.value = DEMO_ARTICLES.slice(0, pageSize.value);
+    total.value = articles.value.length;
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   failed.value = false;
   try {
@@ -99,6 +108,11 @@ function openArticle(slug: string) {
 }
 
 onMounted(async () => {
+  if (props.demo) {
+    categories.value = DEMO_ARTICLE_CATEGORIES;
+    await load();
+    return;
+  }
   // 首屏读地址栏：直接打开 /news?category=brand&page=2 应当落到该分类第 2 页
   const qc = typeof route.query.category === 'string' ? route.query.category : '';
   const qp = Number(route.query.page);
@@ -140,7 +154,7 @@ onMounted(async () => {
 
       <div v-else-if="articles.length === 0" class="sec-empty">
         <p>暂无资讯，敬请期待。</p>
-        <router-link v-if="!preview" to="/" class="btn btn-ghost">返回首页 →</router-link>
+        <UiButton v-if="!preview" text="返回首页 →" to="/" variant="ghost" />
       </div>
 
       <div v-else class="insights-grid">

@@ -27,6 +27,10 @@ const routes: RouteRecordRaw[] = [
       { path: 'search', name: 'search', component: () => import('@/views/website/Search.vue'), meta: { title: '搜索' } },
       // 品牌化 404：置于官网 Layout 内，导航、页脚与 website.css 由 Layout 统一提供
       { path: 'preview/:slug', name: 'preview', component: () => import('@/views/website/Preview.vue'), meta: { title: '草稿预览', requiresAuth: true } },
+      // 一级新增页（A 方案软通配）：必须排在兜底 404 之前。静态段记录优先级高于参数段，
+      // 故 /about、/products 等固定页不会被抢；/product、/article 缺标识会命中这里并因查无页面落 404。
+      // 不设 meta.title，避免 afterEach 的默认标题在真实标题写入前闪一帧。
+      { path: ':slug', name: 'dynamic-page', component: () => import('@/views/website/CmsPage.vue') },
       { path: ':pathMatch(.*)*', name: 'notFound', component: () => import('@/views/website/NotFound.vue'), meta: { title: '404' } },
     ],
   },
@@ -43,8 +47,10 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/layout/index.vue'),
     meta: { requiresAuth: true },
     children: [
-      // 页面装修（首组首叶 → /admin 即页面列表；编辑器为隐藏页，高亮列表）
-      { path: '', name: 'admin-pages-list', component: () => import('@/views/admin/website/pages/index.vue'), meta: { title: '页面装修', requiresAuth: true } },
+      // 页面配置（一级菜单 /admin/pages）：/admin 重定向到页面装修列表；组件库为二级页；编辑器为隐藏页，高亮列表
+      { path: '', redirect: '/admin/pages' },
+      { path: 'pages', name: 'admin-pages-list', component: () => import('@/views/admin/website/pages/index.vue'), meta: { title: '页面装修', requiresAuth: true } },
+      { path: 'pages/components', name: 'admin-pages-components', component: () => import('@/views/admin/website/pages/components.vue'), meta: { title: '组件库', requiresAuth: true } },
       { path: 'pages/editor/:slug', name: 'admin-pages-editor', component: () => import('@/views/admin/website/pages/editor.vue'), meta: { title: '页面装修编辑器', requiresAuth: true, activeMenu: 'admin-pages-list' } },
       // 内容中心（非首组：首叶 /admin/content，其余 /admin/content+叶url）
       { path: 'content', name: 'admin-content-products', component: () => import('@/views/admin/content/product/index.vue'), meta: { title: '产品管理', requiresAuth: true } },
@@ -71,6 +77,13 @@ const routes: RouteRecordRaw[] = [
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes,
+  // 官网整页滚动发生在 window 上，vue-router 默认不接管：进入新页面会沿用上一页的偏移，
+  // 刷新时浏览器自身的位置还原（history.scrollRestoration=auto）也会把视口停在页面中间。
+  // 传入该配置后 vue-router 会自行把 scrollRestoration 置为 manual，并在首次加载时也执行一次，
+  // 因此点击跳转、直接打开、刷新三条路都从顶部开始——忽略 savedPosition，前进/后退同样回顶。
+  // behavior 必须显式给 instant：website.css 里 html{scroll-behavior:smooth} 会把回顶渲染成可见的滑动动画，
+  // 而 window.scrollTo 的入参优先级高于该 CSS。
+  scrollBehavior: () => ({ top: 0, left: 0, behavior: 'instant' }),
 });
 
 /**

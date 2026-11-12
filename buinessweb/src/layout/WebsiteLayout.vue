@@ -13,7 +13,7 @@ const mobileOpen = ref(false);
 onMounted(() => site.ensureLoaded());
 const closeMobile = () => (mobileOpen.value = false);
 
-// 兜底导航（站点配置未加载时使用）
+// 兜底顶栏（当前未被调用，保留待恢复）
 const fallbackMenus: MenuItem[] = [
   { id: 1, parent_id: null, title: '首页', url: '/', target: '_self', location: 'header', sort: 1, status: 1 },
   { id: 2, parent_id: null, title: '关于我们', url: '/about', target: '_self', location: 'header', sort: 2, status: 1 },
@@ -21,6 +21,7 @@ const fallbackMenus: MenuItem[] = [
   { id: 4, parent_id: null, title: '新闻资讯', url: '/news', target: '_self', location: 'header', sort: 4, status: 1 },
   { id: 5, parent_id: null, title: '联系我们', url: '/contact', target: '_self', location: 'header', sort: 5, status: 1 },
 ];
+// 兜底页脚分组列（当前未被调用，保留待恢复）
 const fallbackFooter: MenuItem[] = [
   { id: 101, parent_id: null, title: '公司介绍', url: null, target: '_self', location: 'footer', sort: 1, status: 1, children: [
     { id: 102, parent_id: 101, title: '品牌故事', url: '/about', target: '_self', location: 'footer', sort: 1, status: 1 },
@@ -36,9 +37,16 @@ const fallbackFooter: MenuItem[] = [
   ] },
 ];
 
-const headerMenus = computed(() => (site.menus.length ? site.menus : fallbackMenus));
+// const headerMenus = computed(() => (site.menus.length ? site.menus : fallbackMenus));
+const headerMenus = computed(() => site.menus);
 const ctaMenu = computed(() => site.ctaMenu ?? null);
-const footerCols = computed(() => (site.footerMenus.length ? site.footerMenus : fallbackFooter));
+// 页脚分组列：站点配置与内置兜底两路都先注掉，暂不渲染分组列。
+// 站点配置那路的问题是接口先按 status=1 过滤再建树，分组停用后子项会因找不到父级上浮成顶级，
+// 被模板渲染成只有标题、没有链接的空列。
+// 恢复任一路：注掉下一行，放开对应那行。
+const footerCols = computed<MenuItem[]>(() => []);
+// const footerCols = computed(() => fallbackFooter);
+// const footerCols = computed(() => (site.footerMenus.length ? site.footerMenus : fallbackFooter));
 // 「联系我们」列由站点设置渲染，固定排在菜单分组之后，因此列数 = 分组数 + 1
 const footGridStyle = computed(() => ({ gridTemplateColumns: `1.35fr repeat(${footerCols.value.length + 1}, 1fr)` }));
 

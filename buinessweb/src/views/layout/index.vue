@@ -100,7 +100,10 @@ provide(userNameKey, store.userInfo?.['name'] as string);
 watch(isCollapse, (newVal) => {
   const commonLayout = document.querySelector('.common-layout') as HTMLElement | null;
   if (!commonLayout) return;
-  const asideWidth = newVal ? '64px' : '210px';
+  // 收起 = 64px 折叠菜单 + 左右 12px 内边距 = 88px（.aside-box 已显式 border-box，
+  // 防止 website.css 的 *{box-sizing:border-box} 把 64px 当总宽、把菜单内容区压成 40px）；
+  // 展开沿用 210px
+  const asideWidth = newVal ? '88px' : '210px';
   commonLayout.style.setProperty('--zm-el-aside-width', asideWidth);
 });
 

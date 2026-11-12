@@ -160,6 +160,27 @@ export interface PageListRow {
   updated_at: string;
 }
 
+/** 区块模板（decoration-editor-toolkit）：单个区块自身 props 的快照，children 不入库 */
+export interface BlockTemplate {
+  id: number;
+  name: string;
+  type: string;
+  props: Record<string, any>;
+  /** 创建人姓名（列表接口 join users 得出；创建人被删时为 null） */
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+  /** props 序列化字节体积（列表接口 OCTET_LENGTH 计算，前端超限提示用） */
+  props_bytes?: number;
+}
+
+/** 跨页复制结果：目标页草稿追加副本后的回执 */
+export interface BlockCopyResult {
+  targetId: number;
+  blockCount: number;
+  message: string;
+}
+
 /**
  * 内容所在表：online = 上架表（在架，只读）、draft = 未上架表（草稿或已下架，可编辑可删除）。
  * 与资讯链同形但各自命名：两条链的称谓与状态语义不跨域共用一个别名。

@@ -6,7 +6,7 @@ import type {
   InquiryPayload, CooperationPayload, SubscriptionPayload, ContactPayload,
   PageListRow, ProductAdminRow, ProductEditable, ProductDraftPayload,
   ProductCategoryAdminRow, ProductPublishResult, ProductUnpublishResult,
-  BannerAdminRow, MediaItem,
+  BannerAdminRow, MediaItem, BlockTemplate, BlockCopyResult,
   LeadRow, UserRow, RoleRow, AuditRow, SettingsGrouped, MenuItem,
 } from '@/types/cms';
 import { passwordDigest } from '@/utils/password';
@@ -107,7 +107,9 @@ export const cmsAdmin = {
     list: () => unwrapPaged<PageListRow[]>(http.get('/pages')),
     bySlug: (slug: string) => unwrap<Page>(http.get(`/pages/by-slug/${slug}`)),
     get: (id: number) => unwrap<Page>(http.get(`/pages/${id}`)),
-    create: (body: { slug: string; title: string; contentJson?: any }) => unwrap<{ id: number }>(http.post('/pages', body)),
+    // 新建一级页：后端在同一事务里创建页面记录与顶部 tab 行，返回实际落库的地址
+    create: (body: { slug: string; title: string; contentJson?: any }) =>
+      unwrap<{ id: number; slug: string; tabUrl: string }>(http.post('/pages', body)),
     updateMeta: (id: number, body: { title?: string; metaTitle?: string; metaDescription?: string; heroImage?: string }) =>
       unwrap(http.patch(`/pages/${id}`, body)),
     saveDraft: (id: number, contentJson: any) => unwrap(http.put(`/pages/${id}/draft`, { contentJson })),
@@ -116,6 +118,19 @@ export const cmsAdmin = {
     publish: (id: number) => unwrap(http.post(`/pages/${id}/publish`)),
     unpublish: (id: number) => unwrap(http.post(`/pages/${id}/unpublish`)),
     remove: (id: number) => unwrap(http.delete(`/pages/${id}`)),
+    // 跨页复制区块（decoration-editor-toolkit）：服务端单事务行锁追加副本到目标页草稿
+    copyBlock: (targetSlug: string, body: { sourcePageId: number; blockIndex: number; targetIndex?: number }) =>
+      unwrap<BlockCopyResult>(http.post(`/pages/${targetSlug}/blocks/copy`, body)),
+  },
+  // 区块模板库（decoration-editor-toolkit）：存为模板 / 从模板插入 / 改名 / 删除
+  blockTemplates: {
+    list: (params: Record<string, any> = {}) =>
+      unwrapPaged<BlockTemplate[]>(http.get('/block-templates', { params })),
+    create: (body: { name: string; type: string; props: Record<string, any> }) =>
+      unwrap<{ id: number }>(http.post('/block-templates', body)),
+    update: (id: number, body: { name?: string; type?: string; props?: Record<string, any> }) =>
+      unwrap(http.patch(`/block-templates/${id}`, body)),
+    remove: (id: number) => unwrap(http.delete(`/block-templates/${id}`)),
   },
   // 产品：一条内容同一时刻只存在于一张表，方法按「行在哪张表」分组，id 不跨组混用
   //   products.*      → 上架表的行 id。在架内容只读，内容动作只有下架；

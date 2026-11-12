@@ -1,13 +1,15 @@
 <script setup lang="ts">
 /**
  * 页面列表（装修入口）
- * 列表展示状态/草稿标记/发布时间，操作：装修（跳编辑器）/ 发布 / 下线 / 删除；支持新建页面
+ * 列表展示状态/草稿标记/发布时间，操作：装修（跳编辑器）/ 发布 / 下线 / 删除。
+ * 新建页面入口已统一收敛到「官网配置-导航菜单 → 新增顶部导航页面」，本页只做装修与发布管理。
  */
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { cmsAdmin } from '@/api/cms';
 import type { PageListRow } from '@/types/cms';
+import { isFixedPage } from '@/website/pageRoutes';
 
 const router = useRouter();
 
@@ -48,40 +50,20 @@ async function togglePublish(row: PageListRow) {
 }
 
 async function remove(row: PageListRow) {
+  // 前端也拦一道：固定一级页由代码维护，服务端同样会拒绝
+  if (isFixedPage(row.slug)) {
+    ElMessage.warning('固定页面不可删除，需要暂时隐藏请使用「下线」');
+    return;
+  }
   try {
-    await ElMessageBox.confirm(`确认删除页面「${row.title}」（${row.slug}）？该操作不可恢复。`, '删除确认', { type: 'warning' });
+    await ElMessageBox.confirm(
+      `确认删除页面「${row.title}」（${row.slug}）？将同时移除官网顶部对应栏目，该操作不可恢复。`,
+      '删除确认', { type: 'warning' });
     await cmsAdmin.pages.remove(row.id);
     ElMessage.success('删除成功');
     load();
   } catch (e: any) {
     if (e !== 'cancel' && e?.message) ElMessage.error(e.message);
-  }
-}
-
-// ---- 新建页面 ----
-const createVisible = ref(false);
-const creating = ref(false);
-const createForm = ref({ slug: '', title: '' });
-function openCreate() {
-  createForm.value = { slug: '', title: '' };
-  createVisible.value = true;
-}
-async function submitCreate() {
-  const { slug, title } = createForm.value;
-  if (!slug.trim() || !title.trim()) {
-    ElMessage.warning('请填写页面标识与标题');
-    return;
-  }
-  creating.value = true;
-  try {
-    await cmsAdmin.pages.create({ slug: slug.trim(), title: title.trim(), contentJson: { blocks: [] } });
-    ElMessage.success('创建成功');
-    createVisible.value = false;
-    router.push(`/admin/pages/editor/${slug.trim()}`);
-  } catch (e: any) {
-    ElMessage.error(e?.message || '创建失败');
-  } finally {
-    creating.value = false;
   }
 }
 
@@ -96,15 +78,25 @@ function fmtTime(v: string | null) {
       <template #header>
         <div class="pl-header">
           <span class="pl-title">页面装修</span>
-          <div>
-            <el-button @click="load">刷新</el-button>
-            <el-button type="primary" @click="openCreate">新建页面</el-button>
-          </div>
+          <el-button @click="load">刷新</el-button>
         </div>
       </template>
 
+      <el-alert type="info" :closable="false" show-icon class="pl-tip">
+        新建页面入口在「官网配置-导航菜单 → 新增顶部导航页面」：创建时会同步生成顶部导航栏目与 /{标识} 地址，
+        随后可在本页进行装修、发布、下线。
+        首页、关于、产品、资讯、联系为固定页面，由代码维护，不可删除（需要临时隐藏请用「下线」）。
+      </el-alert>
+
       <el-table v-loading="loading" :data="rows" stripe>
         <el-table-column prop="title" label="页面标题" min-width="160" />
+        <el-table-column label="类型" width="90" align="center">
+          <template #default="{ row }">
+            <el-tag :type="isFixedPage(row.slug) ? 'info' : 'success'" size="small">
+              {{ isFixedPage(row.slug) ? '固定' : '新增' }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="slug" label="页面标识" min-width="120">
           <template #default="{ row }"><code>{{ row.slug }}</code></template>
         </el-table-column>
@@ -127,31 +119,16 @@ function fmtTime(v: string | null) {
         <el-table-column label="最近更新" width="180">
           <template #default="{ row }">{{ fmtTime(row.updated_at) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="230" align="right" fixed="right">
+        <el-table-column label="操作" class-name="ops-col" width="280" align="right" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" @click="goEditor(row)">装修</el-button>
             <el-button link type="success" :disabled="row.status === 1" @click="togglePublish(row)">发布</el-button>
             <el-button link type="warning" :disabled="row.status !== 1" @click="togglePublish(row)">下线</el-button>
-            <el-button link type="danger" @click="remove(row)">删除</el-button>
+            <el-button link type="danger" :disabled="isFixedPage(row.slug)" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
     </el-card>
-
-    <el-dialog v-model="createVisible" title="新建页面" width="440px">
-      <el-form label-width="90px">
-        <el-form-item label="页面标识">
-          <el-input v-model="createForm.slug" placeholder="URL 片段，如：solutions（仅小写字母/数字/中划线）" />
-        </el-form-item>
-        <el-form-item label="页面标题">
-          <el-input v-model="createForm.title" placeholder="如：解决方案" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="createVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="submitCreate">创建并装修</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
@@ -167,10 +144,25 @@ function fmtTime(v: string | null) {
 .pl-muted {
   color: #c0c4cc;
 }
+.pl-tip {
+  margin-bottom: 16px;
+  line-height: 1.7;
+}
 .pages-list code {
   background: #f5f7fa;
   padding: 2px 6px;
   border-radius: 4px;
   font-size: 12px;
+}
+/* 操作列按钮一行横向平铺，不换行 */
+:deep(td.ops-col .cell) {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+:deep(td.ops-col .el-button + .el-button) {
+  margin-left: 0;
 }
 </style>

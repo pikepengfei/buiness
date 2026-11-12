@@ -6,39 +6,10 @@ import { fail, ok, paginate, sanitize, escapeLike, keywordOf, statusOf, jsonb, s
 import { authPreHandler, requirePerm, getClientInfo } from '../middleware/auth.js';
 import { publicUrl, removeObject } from '../storage.js';
 import { ErrCode, isUniqueViolation } from '../errors.js';
+import { deepSanitize, duplicateBlockTree, validateBlocks } from '../blocks.js';
 
 const read = [authPreHandler, requirePerm('content:read')];
 const write = [authPreHandler, requirePerm('content:write')];
-
-// 递归清洗 content_json 中的字符串叶子（防 XSS）
-function deepSanitize(value: any): any {
-  if (typeof value === 'string') return sanitize(value);
-  if (Array.isArray(value)) return value.map(deepSanitize);
-  if (value && typeof value === 'object') {
-    const o: any = {};
-    for (const k of Object.keys(value)) o[k] = deepSanitize(value[k]);
-    return o;
-  }
-  return value;
-}
-
-// 区块结构校验：仅校验骨架 { blocks: [{ id, type, visible, props }] }，
-// 具体 type 与各 props 由前端 sectionRegistry 定义，后端不重复维护类型清单。
-const blocksSchema = z.object({
-  blocks: z.array(z.object({
-    id: z.string().min(1).max(64),
-    type: z.string().min(1).max(40),
-    visible: z.boolean().default(true),
-    props: z.record(z.any()).default({}),
-  })).max(200).default([]),
-});
-function validateBlocks(raw: any): { ok: true; data: any } | { ok: false; msg: string } {
-  const parsed = blocksSchema.safeParse(raw);
-  if (parsed.success) return { ok: true, data: parsed.data };
-  const first = parsed.error.issues[0];
-  const at = Array.isArray(first?.path) ? first.path.join('.') : '';
-  return { ok: false, msg: `区块数据不合法${at ? `（${at}）` : ''}：需为 { blocks: [{ id, type, visible, props }] }` };
-}
 
 function audit(req: any, action: string, type: string, id: any) {
   const { ip } = getClientInfo(req);
@@ -70,6 +41,33 @@ const reorderSchema = z.object({
 
 // 导航位：与 menus.location 的 CHECK 约束保持一致
 const MENU_LOCATIONS = ['header', 'footer', 'cta'] as const;
+
+// ---------------- 官网一级页面地址（A 方案 `/:slug` 软通配） ----------------
+// 固定一级页：路由由代码注册，页面记录与对应导航行都不可删除。固定身份由 slug 集合派生，
+// 不额外加 is_fixed 列——「地址是否固定」的真相在路由表里，数据库标记只会制造第二份真相，
+// 还会让代码在迁移未执行的库上直接报错。
+const FIXED_PAGE_SLUGS = ['home', 'about', 'products', 'news', 'contact'] as const;
+// 保留字：固定页 + 二级详情前缀 + 辅助/门控/管理段 + 历史死链（option 必须入表，否则死链复活）。
+// 与 buinessweb/src/website/pageRoutes.ts 的同名常量保持同步。
+const RESERVED_PAGE_SLUGS: ReadonlySet<string> = new Set([
+  ...FIXED_PAGE_SLUGS,
+  'product', 'article', 'search', 'login', 'preview', 'admin', 'option', 'p', '404',
+]);
+const PAGE_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const pageUrlOf = (slug: string) => `/${slug}`;
+/**
+ * 页面标识录入规范化：与 buinessweb/src/website/pageRoutes.ts 的 normalizePageSlug 同口径，
+ * 改动须两端同步。运营常把地址连同 `/` 一起粘贴，或从网页复制带进零宽字符/空格，
+ * 这里统一整理后再校验与落库，避免「看着没问题却报格式错」。
+ */
+const normalizePageSlug = (raw: string) => String(raw ?? '')
+  .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2064\uFEFF\u00A0]/g, '')
+  .trim()
+  .replace(/^\/+/, '')
+  .toLowerCase()
+  .replace(/[\s_./\\]+/g, '-')
+  .replace(/-+/g, '-')
+  .replace(/^-+|-+$/g, '');
 
 // 资讯状态文案单一来源（3.7）：判据是「条目在哪张表 + 草稿表的 state」，
 // 已上线 = articles 有行（status 恒 1）、草稿 = article_drafts 的 state=0、已下线 = state=2。
@@ -224,6 +222,9 @@ export async function contentRoutes(app: FastifyInstance) {
     if (!rows[0]) return fail(reply, 404, '页面不存在');
     return ok(reply, rows[0]);
   });
+  // 新增一级页：这里是「新建顶部 tab 栏目」的唯一入口。
+  // 页面记录与顶栏行必须同生共死——只建页面不建 tab 是「发布了没入口」，
+  // 只建 tab 不建页面（旧导航菜单页的做法）就是 /option 死链的成因。
   app.post('/pages', { preHandler: write }, async (req, reply) => {
     const s = z.object({
       slug: z.string().min(1).max(80), title: z.string().min(1).max(120),
@@ -233,17 +234,53 @@ export async function contentRoutes(app: FastifyInstance) {
     }).safeParse(req.body);
     if (!s.success) return fail(reply, 400, '参数错误');
     const b = s.data;
-    if (!(await assertSlugFree('pages', b.slug, reply))) return;
+    const slug = normalizePageSlug(b.slug);
+    const title = b.title.trim();
+    if (!title) return fail(reply, 400, '页面标题不能为空', ErrCode.BAD_REQUEST);
+    if (!PAGE_SLUG_RE.test(slug)) {
+      return fail(reply, 400, '页面标识只能含小写字母、数字与中划线，且不能以中划线开头或结尾；请去掉中文、标点或粘贴带入的不可见字符', ErrCode.BAD_REQUEST);
+    }
+    if (RESERVED_PAGE_SLUGS.has(slug)) {
+      return fail(reply, 400, `「${slug}」是系统保留地址，请换一个页面标识`, ErrCode.BAD_REQUEST);
+    }
+    if (!(await assertSlugFree('pages', slug, reply))) return;
     const v = validateBlocks(b.contentJson);
     if (!v.ok) return fail(reply, 400, v.msg, ErrCode.BAD_REQUEST);
     const cleaned = deepSanitize(v.data);
-    const { rows } = await query(
-      `INSERT INTO pages(slug,title,meta_title,meta_description,hero_image,status,published_at,content_json,draft_json,created_by)
-       VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $9 THEN NOW() ELSE NULL END,$7,$7,$8) RETURNING id`,
-      [b.slug, b.title, b.metaTitle || null, b.metaDescription || null, b.heroImage || null, b.status,
-       jsonb(cleaned), req.user!.id, b.status === 1]);
-    await audit(req, 'create', 'page', rows[0].id);
-    return ok(reply, { id: rows[0].id });
+    const tabUrl = pageUrlOf(slug);
+    // menus 在 header 上有 partial UNIQUE(url)，先给可读文案，别把 23505 直接抛给运营
+    const { rows: dup } = await query(`SELECT 1 FROM menus WHERE location='header' AND url=$1`, [tabUrl]);
+    if (dup[0]) return fail(reply, 400, `顶部导航已存在「${tabUrl}」，请换一个页面标识`, ErrCode.BAD_REQUEST);
+
+    let pageId = 0;
+    try {
+      await transaction(async (client) => {
+        const ins = await client.query(
+          `INSERT INTO pages(slug,title,meta_title,meta_description,hero_image,status,published_at,content_json,draft_json,created_by)
+           VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $9 THEN NOW() ELSE NULL END,$7,$7,$8) RETURNING id`,
+          [slug, title, b.metaTitle || null, b.metaDescription || null, b.heroImage || null, b.status,
+           jsonb(cleaned), req.user!.id, b.status === 1]);
+        pageId = Number(ins.rows[0].id);
+        // menus.title 只有 VARCHAR(50)，页面标题可达 120，截断以免插入失败；
+        // sort 追加到现有顶栏之后，固定六行顺序不受影响。
+        // 用 CTE 传参并显式 ::varchar：若把 $2 同时写在 SELECT 列表与 WHERE url=$2，
+        // PG 会分别推断成 text 与 varchar，报 "inconsistent types deduced for parameter $2"。
+        // 参数只出现一次且类型固定，同时保留 NOT EXISTS 的并发防重语义。
+        await client.query(
+          `WITH p AS (SELECT $1::varchar AS title, $2::varchar AS url)
+           INSERT INTO menus(location,parent_id,title,url,target,sort,status)
+           SELECT 'header', NULL, p.title, p.url, '_self',
+                  COALESCE((SELECT MAX(sort) FROM menus WHERE location='header' AND parent_id IS NULL), 0) + 1, 1
+           FROM p
+           WHERE NOT EXISTS (SELECT 1 FROM menus WHERE location='header' AND url=p.url)`,
+          [title.slice(0, 50), tabUrl]);
+      });
+    } catch (e) {
+      if (isUniqueViolation(e)) return fail(reply, 409, '页面标识或顶部导航链接已被占用', ErrCode.SLUG_EXISTS);
+      throw e;
+    }
+    await audit(req, 'create', 'page', pageId);
+    return ok(reply, { id: pageId, slug, tabUrl });
   });
   app.get('/pages/:id', { preHandler: read }, async (req, reply) => {
     const { rows } = await query(`SELECT * FROM pages WHERE id=$1`, [(req.params as any).id]);
@@ -310,9 +347,221 @@ export async function contentRoutes(app: FastifyInstance) {
     await audit(req, 'unpublish', 'page', id);
     return ok(reply);
   });
+  // 固定一级页不可删除；新增一级页删除时，同事务清掉它自动生成的顶栏行，
+  // 否则官网会留下一个点了就 404 的空 tab。固定导航行与 CTA / 页脚行一律不动。
   app.delete('/pages/:id', { preHandler: write }, async (req, reply) => {
-    await query(`DELETE FROM pages WHERE id=$1`, [(req.params as any).id]);
-    await audit(req, 'delete', 'page', (req.params as any).id);
+    const id = Number((req.params as any).id);
+    const { rows } = await query<{ slug: string }>(`SELECT slug FROM pages WHERE id=$1`, [id]);
+    if (!rows[0]) return fail(reply, 404, '页面不存在', ErrCode.NOT_FOUND);
+    const slug = rows[0].slug;
+    if ((FIXED_PAGE_SLUGS as readonly string[]).includes(slug)) {
+      return fail(reply, 400, `「${slug}」是官网固定页面，由代码维护，不可删除；需要暂时隐藏请使用「下线」`, ErrCode.BAD_REQUEST);
+    }
+    await transaction(async (client) => {
+      await client.query(`DELETE FROM pages WHERE id=$1`, [id]);
+      await client.query(
+        `DELETE FROM menus WHERE location='header' AND parent_id IS NULL AND url=$1`, [pageUrlOf(slug)]);
+    });
+    await audit(req, 'delete', 'page', id);
+    return ok(reply);
+  });
+
+  // ---------------- 跨页复制区块（decoration-editor-toolkit D3 / A1 / C1 / C3） ----------------
+  // 服务端单事务行锁追加副本：两人同时编辑目标页时后到者在当前草稿上追加，不覆盖他人改动。
+  // A1：目标页 draft_json 为 {} 表示「未保存过草稿，回落线上版本」，必须先物化 content_json
+  // 再追加——直接写会让 draft 只含复制块，随后发布会把整页替换成该块。
+  app.post('/pages/:slug/blocks/copy', { preHandler: write }, async (req, reply) => {
+    const targetSlug = String((req.params as any).slug);
+    const parsed = z.object({
+      sourcePageId: z.coerce.number().int().positive(),
+      blockIndex: z.coerce.number().int().min(0),
+      targetIndex: z.coerce.number().int().min(0).optional(),
+    }).safeParse(req.body);
+    if (!parsed.success) {
+      return fail(reply, 400, '参数错误：sourcePageId / blockIndex 必填且为非负整数', ErrCode.BAD_REQUEST);
+    }
+    const { sourcePageId, blockIndex, targetIndex } = parsed.data;
+
+    type CopyResult = { notFound: string } | { bad: string } | { targetId: number; blockCount: number };
+    const result = await transaction<CopyResult>(async (client): Promise<CopyResult> => {
+      const target = await client.query(`SELECT id, draft_json, content_json FROM pages WHERE slug=$1 FOR UPDATE`, [targetSlug]);
+      if (!target.rows[0]) return { notFound: `目标页面（${targetSlug}）不存在` };
+      const targetRow = target.rows[0];
+      const targetId = Number(targetRow.id);
+      // 目标草稿基底：draft 为 {} 时物化线上版本（A1），两者皆空才从零开始
+      const draftBlocks = Array.isArray(targetRow.draft_json?.blocks) ? targetRow.draft_json.blocks : null;
+      const baseBlocks: any[] = draftBlocks
+        ?? (Array.isArray(targetRow.content_json?.blocks) ? targetRow.content_json.blocks : []);
+
+      // 源区块：源页草稿优先，否则线上版本（与编辑器读取回落链同口径）
+      let sourceBlocks: any[] | null = null;
+      if (targetId === sourcePageId) {
+        sourceBlocks = baseBlocks.length ? baseBlocks : null; // 复制到自身页面：直接用锁定行内容
+      } else {
+        const src = await client.query(`SELECT draft_json, content_json FROM pages WHERE id=$1`, [sourcePageId]);
+        if (!src.rows[0]) return { notFound: '来源页面不存在' };
+        const d = src.rows[0].draft_json;
+        const c = src.rows[0].content_json;
+        sourceBlocks = Array.isArray(d?.blocks) ? d.blocks : Array.isArray(c?.blocks) ? c.blocks : null;
+      }
+      if (!sourceBlocks) return { notFound: '来源页面没有可复制的区块内容' };
+      const source = sourceBlocks[blockIndex];
+      if (!source) return { notFound: `来源页面第 ${blockIndex + 1} 个区块不存在` };
+
+      // 深拷贝整树（含 children）+ 逐节点全新 id（C3：服务端独立 id 生成）
+      const taken = new Set<string>();
+      const collectIds = (list: any[]) => list.forEach((b) => {
+        taken.add(String(b.id));
+        if (b.children?.length) collectIds(b.children);
+      });
+      collectIds(baseBlocks);
+      const copy = duplicateBlockTree(source, taken);
+      // 副本过 deepSanitize（A2 同口径）：复制内容落库前统一白名单清洗
+      const cleaned = deepSanitize(copy);
+
+      const at = targetIndex ?? baseBlocks.length;
+      if (at > baseBlocks.length) {
+        return { bad: `插入位置超出范围：目标页当前共 ${baseBlocks.length} 个顶层区块` };
+      }
+      const next = [...baseBlocks];
+      next.splice(at, 0, cleaned);
+      // G6.2 服务端独立结构校验：上限与前端 BLOCK_LIMITS 一致，前端校验不是唯一防线
+      const v = validateBlocks({ blocks: next });
+      if (!v.ok) return { bad: `复制会超出页面结构上限：${v.msg}` };
+      await client.query(`UPDATE pages SET draft_json=$1 WHERE id=$2`, [jsonb(v.data), targetId]);
+      return { targetId, blockCount: next.length };
+    });
+
+    if ('notFound' in result) return fail(reply, 404, result.notFound, ErrCode.NOT_FOUND);
+    if ('bad' in result) return fail(reply, 400, result.bad, ErrCode.BAD_REQUEST);
+    // C1 审计留痕：跨页复制记 page 域动作，可追溯「谁把哪页的区块复制到了哪页」
+    await audit(req, 'copy_block', 'page', result.targetId);
+    return ok(reply, {
+      targetId: result.targetId,
+      blockCount: result.blockCount,
+      message: `已复制到目标页草稿末尾，当前共 ${result.blockCount} 个顶层区块；复制的是副本，之后与来源页互不影响`,
+    });
+  });
+
+  // ---------------- 区块模板（decoration-editor-toolkit D4 / D9 / A2 / C1） ----------------
+  // 模板 = 单个区块自身 props 的快照，children 不入库（子内容属于页面实例）。
+  // 类型语义是否可用由前端注册表判定（isTemplateUsable / 类型已下线标记），后端不重复维护类型清单，
+  // 只校验 key 形态与体积/条数上限——与 pages 草稿「后端不维护类型清单」的既有口径一致。
+  const TEMPLATE_PROPS_MAX_BYTES = 256 * 1024;
+  const TEMPLATE_LIST_MAX_ITEMS = 200;
+  const templateSchema = z.object({
+    name: z.string().min(1).max(80),
+    type: z.string().min(1).max(40).regex(/^[a-z][a-z0-9-]*$/, 'type 必须是注册表键形态（小写字母/数字/中划线）'),
+    props: z.record(z.unknown()).default({}),
+  });
+
+  /** props 体积与 list 类字段条数上限（D9）：rich-text 的 html 最可能撑大，序列化字节数即体积 */
+  function templatePropsIssue(props: unknown): string | null {
+    const serialized = JSON.stringify(props ?? {});
+    if (serialized.length > TEMPLATE_PROPS_MAX_BYTES) {
+      return `序列化后 ${serialized.length} 字节，超出上限 ${TEMPLATE_PROPS_MAX_BYTES} 字节`;
+    }
+    let listIssue: string | null = null;
+    const walk = (v: unknown) => {
+      if (listIssue) return;
+      if (Array.isArray(v)) {
+        if (v.length > TEMPLATE_LIST_MAX_ITEMS) listIssue = `列表字段条目 ${v.length} 超出上限 ${TEMPLATE_LIST_MAX_ITEMS} 项`;
+        v.forEach(walk);
+      } else if (v && typeof v === 'object') {
+        Object.values(v).forEach(walk);
+      }
+    };
+    walk(props);
+    return listIssue;
+  }
+
+  // 列表全量返回 props（前端缩略要真实渲染模板自身内容，D10）；OCTET_LENGTH 附带字节体积供前端提示
+  app.get('/block-templates', { preHandler: read }, async (req, reply) => {
+    const { page, pageSize, offset } = paginate((req.query as any).page, (req.query as any).pageSize);
+    const kw = keywordOf((req.query as any).keyword);
+    const type = keywordOf((req.query as any).type, 40);
+    const where: string[] = [];
+    const params: any[] = [];
+    if (kw) { where.push(`t.name ILIKE $${params.length + 1}`); params.push(`%${escapeLike(kw)}%`); }
+    if (type) { where.push(`t.type=$${params.length + 1}`); params.push(type); }
+    const { rows, total } = await queryPaginated(
+      `SELECT t.id, t.name, t.type, t.props, COALESCE(u.display_name, u.username) AS created_by_name,
+              t.created_at, t.updated_at, OCTET_LENGTH(t.props::text) AS props_bytes
+         FROM block_templates t LEFT JOIN users u ON u.id = t.created_by
+        ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+        ORDER BY t.created_at DESC`,
+      params, pageSize, offset);
+    return ok(reply, rows, { page, pageSize, total });
+  });
+
+  app.post('/block-templates', { preHandler: write }, async (req, reply) => {
+    const parsed = templateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return fail(reply, 400, '参数错误：name / type 必填且长度受限，props 必须是对象', ErrCode.BAD_REQUEST);
+    }
+    const b = parsed.data;
+    const issue = templatePropsIssue(b.props);
+    if (issue) return fail(reply, 400, `模板内容超限：${issue}`, ErrCode.UNPROCESSABLE);
+    // A2：模板 props 会经 LibraryCard → SectionRenderer（含 v-html）渲染，入库前统一 deepSanitize，
+    // 防止把存储型 XSS 写进模板库（与页面草稿 PUT 同口径）
+    const cleaned = deepSanitize(b.props);
+    let id = 0;
+    try {
+      const { rows } = await query(
+        `INSERT INTO block_templates(name,type,props,created_by) VALUES($1,$2,$3,$4) RETURNING id`,
+        [b.name.trim(), b.type, jsonb(cleaned), req.user!.id]);
+      id = Number(rows[0].id);
+    } catch (e) {
+      if (isUniqueViolation(e)) {
+        return fail(reply, 409, `已存在同类型同名的模板「${b.name}」，请改名，或确认后用覆盖更新`, ErrCode.SLUG_EXISTS);
+      }
+      throw e;
+    }
+    await audit(req, 'create', 'block_template', id);
+    return ok(reply, { id });
+  });
+
+  // 改名 / 改类型 / 覆写内容（重名覆盖走本端点：前端二次确认后整份重写 name/type/props）
+  app.patch('/block-templates/:id', { preHandler: write }, async (req, reply) => {
+    const id = Number((req.params as any).id);
+    const parsed = templateSchema.partial().safeParse(req.body);
+    if (!parsed.success) return fail(reply, 400, '参数错误', ErrCode.BAD_REQUEST);
+    const b = parsed.data;
+    if (b.name === undefined && b.type === undefined && b.props === undefined) {
+      return fail(reply, 400, '无更新字段', ErrCode.NO_UPDATE_FIELD);
+    }
+    if (b.props !== undefined) {
+      const issue = templatePropsIssue(b.props);
+      if (issue) return fail(reply, 400, `模板内容超限：${issue}`, ErrCode.UNPROCESSABLE);
+    }
+    const sets: string[] = [];
+    const p: any[] = [];
+    let i = 1;
+    if (b.name !== undefined) { sets.push(`name=$${i++}`); p.push(b.name.trim()); }
+    if (b.type !== undefined) { sets.push(`type=$${i++}`); p.push(b.type); }
+    if (b.props !== undefined) { sets.push(`props=$${i++}`); p.push(jsonb(deepSanitize(b.props))); }
+    p.push(id);
+    let rowCount: number | null = 0;
+    try {
+      const res = await query(`UPDATE block_templates SET ${sets.join(',')} WHERE id=$${i}`, p);
+      rowCount = res.rowCount;
+    } catch (e) {
+      if (isUniqueViolation(e)) {
+        return fail(reply, 409, '已存在同类型同名的模板，覆盖前请先调整命名', ErrCode.SLUG_EXISTS);
+      }
+      throw e;
+    }
+    if (!rowCount) return fail(reply, 404, '模板不存在', ErrCode.NOT_FOUND);
+    await audit(req, 'update', 'block_template', id);
+    return ok(reply);
+  });
+
+  // 删除任何有写权限者可执行（模板不是线上内容，误删影响面只是下次插入少个选项），前端做二次确认
+  app.delete('/block-templates/:id', { preHandler: write }, async (req, reply) => {
+    const id = Number((req.params as any).id);
+    const { rowCount } = await query(`DELETE FROM block_templates WHERE id=$1`, [id]);
+    if (!rowCount) return fail(reply, 404, '模板不存在', ErrCode.NOT_FOUND);
+    await audit(req, 'delete', 'block_template', id);
     return ok(reply);
   });
 
@@ -1377,8 +1626,33 @@ export async function contentRoutes(app: FastifyInstance) {
     }
     return ok(reply);
   });
+  // 删除保护（与前端 menus.vue 的删除规则同口径）：
+  //   1. 右上角 CTA 与顶栏固定行（首页/关于/产品/资讯/联系）由代码维护，不可删除；
+  //   2. 页面已发布（status=1）时其顶栏导航不可删除——官网正在引用，删除即产生死链，
+  //      需先到「页面装修」下线；
+  //   3. 其余（未发布页面的顶栏行、页脚分组/子项）可自由删除。
   app.delete('/menus/:id', { preHandler: write }, async (req, reply) => {
-    await query(`DELETE FROM menus WHERE id=$1`, [(req.params as any).id]);
+    const id = Number((req.params as any).id);
+    const { rows } = await query<{ location: string; url: string | null }>(
+      'SELECT location, url FROM menus WHERE id=$1', [id]);
+    const m = rows[0];
+    if (!m) return fail(reply, 404, '菜单不存在', ErrCode.NOT_FOUND);
+    if (m.location === 'cta') {
+      return fail(reply, 400, '右上角按钮为固定项，不可删除', ErrCode.BAD_REQUEST);
+    }
+    if (m.location === 'header') {
+      // 顶栏行 url → 页面 slug：首页行为 '/'，其余为 '/{slug}'
+      const slug = m.url === '/' ? 'home' : (m.url ?? '').replace(/^\//, '');
+      if ((FIXED_PAGE_SLUGS as readonly string[]).includes(slug)) {
+        return fail(reply, 400, '固定导航项由代码维护，不可删除', ErrCode.BAD_REQUEST);
+      }
+      const { rows: pg } = await query<{ status: number }>('SELECT status FROM pages WHERE slug=$1', [slug]);
+      if (pg[0]?.status === 1) {
+        return fail(reply, 400, `页面「${slug}」已发布，导航菜单不可删除；请先在「页面装修」下线`, ErrCode.BAD_REQUEST);
+      }
+    }
+    await query(`DELETE FROM menus WHERE id=$1`, [id]);
+    await audit(req, 'delete', 'menu', id);
     return ok(reply);
   });
 
